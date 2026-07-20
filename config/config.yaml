@@ -1,0 +1,9 @@
+
+project:
+  name: dp-ml-comparison
+  seed: 17
+  output_dir: results/
+
+privacy:
+#  interval_list: 
+  epsilon: 2.0

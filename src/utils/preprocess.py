@@ -8,6 +8,12 @@ import pandas as pd
 from src.utils.appliance_map import get_appliance_name, APPLIANCE_MAP
 
 
+UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.normpath(os.path.join(UTILS_DIR, '..', 'data', 'eco'))
+RAW_DIR = os.path.join(DATA_DIR, 'raw')
+PREPROCESS_DIR = os.path.join(DATA_DIR, 'preprocess')
+
+
 def get_plug_data(filepath: str, appliance_no: str, meter_id: str):
     dirname, filename = os.path.split(filepath)
     parts = dirname.split(os.sep)
@@ -21,34 +27,30 @@ def get_plug_data(filepath: str, appliance_no: str, meter_id: str):
 
 
 
-def preprocess(raw_dir: str, process_dir: str):
+def preprocess(raw_fp: str):
     '''
     gotta probably put the for meter dir in main, will do later teehee
     '''
-    for meter_dir in glob.glob(os.path.join(raw_dir, 'sm_*')):
-        for raw_fp in glob.glob(os.path.join(meter_dir, '*.csv')):
-            meter_id = os.path.basename(meter_dir)
-            filename = os.path.basename(raw_fp)
-            meter_process = os.path.join(process_dir, meter_id)
-            os.makedirs(meter_process, exist_ok=True)
-            process_fp = os.path.join(meter_process, filename)
+    meter_id = os.path.basename(os.path.dirname(raw_fp))
+    filename = os.path.basename(raw_fp)
+    meter_process = os.path.join(PREPROCESS_DIR, meter_id)
+    os.makedirs(meter_process, exist_ok=True)
+    process_fp = os.path.join(meter_process, filename)
 
-            mains_df = pd.read_csv(raw_fp, usecols=[0], header=None, names=['power']) ### make list of read_csv and merge with concat?
+    mains_df = pd.read_csv(raw_fp, usecols=[0], header=None, names=['power']) ### make list of read_csv and merge with concat?
 
-            appliances = APPLIANCE_MAP[meter_id]
-            appliance_df = []
-            for appliance, appliance_no in appliances.items():
-                appliance_df.append(get_plug_data(raw_fp,appliance_no,meter_id))
+    appliances = APPLIANCE_MAP[meter_id]
+    appliance_df = []
+    for appliance_no in appliances.values():
+        appliance_df.append(get_plug_data(raw_fp,appliance_no,meter_id))
 
-            df = pd.concat([mains_df] + appliance_df, axis=1)
-            df.to_csv(process_fp, index=False)
-
+    df = pd.concat([mains_df] + appliance_df, axis=1)
+    df.to_csv(process_fp, index=False)
 
 def main():
-    pass
+    for meter_dir in glob.glob(os.path.join(RAW_DIR, 'sm_*')):
+        for raw_fp in glob.glob(os.path.join(meter_dir, '*.csv')):
+            preprocess(raw_fp)
 
-UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.normpath(os.path.join(UTILS_DIR, '..', 'data'))
-
-# if __name__ == "__main__":
-#    main()
+if __name__ == "__main__":
+    main()

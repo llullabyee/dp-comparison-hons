@@ -9,7 +9,7 @@ from src.utils.appliance_map import get_appliance_name, APPLIANCE_MAP
 
 
 UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.normpath(os.path.join(UTILS_DIR, '..', 'data', 'eco'))
+DATA_DIR = os.path.normpath(os.path.join(UTILS_DIR, '..', '..', 'data', 'eco'))
 RAW_DIR = os.path.join(DATA_DIR, 'raw')
 PREPROCESS_DIR = os.path.join(DATA_DIR, 'preprocess')
 
@@ -17,11 +17,13 @@ PREPROCESS_DIR = os.path.join(DATA_DIR, 'preprocess')
 def get_plug_data(filepath: str, appliance_no: str, meter_id: str):
     dirname, filename = os.path.split(filepath)
     parts = dirname.split(os.sep)
-    parts = ['plug' if p.startswith('sm_') else p for p in parts]
+    parts = [p.replace('sm', 'plug') if p.startswith('sm_') else p for p in parts]
+    print(parts)
     new_dir = os.sep.join(parts)
     new_filepath = os.path.join(new_dir, appliance_no, filename)
     col_name=get_appliance_name(meter_id, appliance_no)
     if not os.path.exists(new_filepath):
+        print("hello")
         return pd.DataFrame(columns=[col_name], dtype=float)
     return pd.read_csv(new_filepath, usecols=[0], header=None, names=[col_name])
 

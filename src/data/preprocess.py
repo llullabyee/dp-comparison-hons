@@ -8,8 +8,7 @@ import pandas as pd
 from src.utils.appliance_map import get_appliance_name, APPLIANCE_MAP
 
 
-UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.normpath(os.path.join(UTILS_DIR, '..', '..', 'data', 'eco'))
+DATA_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'eco'))
 RAW_DIR = os.path.join(DATA_DIR, 'raw')
 PREPROCESS_DIR = os.path.join(DATA_DIR, 'preprocess')
 

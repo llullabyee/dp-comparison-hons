@@ -16,15 +16,15 @@ def dplm_noise(curr_reading: int, norm_prob: float, max_error: float, peak: int,
     z_score = norm.interval(norm_prob)[1]
     std_dev = error_Wh / z_score
     variance = std_dev ** 2
-    laplace_scale = math.sqrt(variance / (2*num_readings))
+    laplace_scale = math.sqrt(variance / (2 * num_readings))
     noise = np.random.laplace(loc=0, scale=laplace_scale)
-    print(error_Wh,z_score,std_dev,variance,laplace_scale,noise)
     if noise > peak:
         return peak
     return noise
 
+
 def dplm_mechanism(df: DataFrame, norm_prob: float, max_error: float,
-                   peak: int, excess: int = 0) -> int:
+                   peak: int, excess: int = 0, num_readings: int = 1) -> float:
     """
     Apply DPLM noise to every row of `df`, with peak clipping and
     excess carry-over into the next reading.
@@ -33,25 +33,35 @@ def dplm_mechanism(df: DataFrame, norm_prob: float, max_error: float,
     - Carried `excess` from the previous row is added AFTER noise.
     - If power + noise + excess >= peak, output is clipped to peak
       and the overflow is carried into the next reading.
+
+    Noise generation and per-reading clipping are fully vectorised; only the
+    excess carry-over (an inherently sequential recurrence) is looped, and
+    that loop now does plain arithmetic with no per-row scipy/print overhead.
     """
-    noisy_values = []
+    readings = df["power"].to_numpy(dtype=float)
 
-    for _, row in df.iterrows():
-        reading = row['power']
+    # z_score / scale factor are constant across rows -> compute once.
+    z_score = norm.interval(norm_prob)[1]
+    scale_factor = (max_error / z_score) / math.sqrt(2 * num_readings)
+    laplace_scale = np.abs(readings) * scale_factor
 
-        noise = dplm_noise(curr_reading=reading,
-                           norm_prob=norm_prob,
-                           max_error=max_error,
-                           peak=peak)
+    noise = np.random.laplace(loc=0.0, scale=laplace_scale)
+    np.minimum(noise, peak, out=noise)  # per-reading noise clip (matches dplm_noise)
 
-        value = reading + noise + excess
-        excess = 0
+    base = readings + noise  # reading + (clipped) noise, before excess carry
 
+    # Sequential excess carry-over recurrence (cannot be vectorised due to the
+    # reset-on-underflow clamp), but this is now cheap scalar arithmetic.
+    noisy_values = np.empty_like(base)
+    carry = float(excess)
+    for i in range(base.shape[0]):
+        value = base[i] + carry
         if value >= peak:
-            excess = value - peak   # carry the overflow forward
+            carry = value - peak
             value = peak
-
-        noisy_values.append(value)
+        else:
+            carry = 0.0
+        noisy_values[i] = value
 
     df["power_noisy"] = noisy_values
-    return excess
+    return carry

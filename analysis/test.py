@@ -19,6 +19,8 @@ RESULT_DIR_GAI = os.path.normpath(os.path.join(RESULT_DIR, 'gai'))
 RESULT_DIR_DPLM = os.path.normpath(os.path.join(RESULT_DIR, 'dplm'))
 
 # %%
+interval_list = list(range(0, 11101, 100))
+
 for meter_dir in sorted(glob.glob(os.path.join(PROCESS_DIR, 'sm_*'))):
     excess = 0
     prev_date = None
@@ -36,7 +38,6 @@ for meter_dir in sorted(glob.glob(os.path.join(PROCESS_DIR, 'sm_*'))):
 # %%
         df = pd.read_csv(filepath)
 
-        interval_list = list(range(0, 11101, 100))
         gai_mechanism(df, interval_list, 1.0)
         df[['perturbed']].to_csv(gai_result_fp, index=False)
 

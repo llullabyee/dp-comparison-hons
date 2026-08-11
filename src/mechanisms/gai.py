@@ -2,7 +2,6 @@ import math
 import random
 import numpy as np
 import pandas as pd
-from src.utils.functions import find_bounds
 
 
 def gai_discretise(u: int, v: int, x: int) -> int:  ### change u to lower and v to upper, use more verbose code?

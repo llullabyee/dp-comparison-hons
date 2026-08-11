@@ -4,6 +4,19 @@ import numpy as np
 import pandas as pd
 
 
+def build_interval_list(epsilon: float, max_value: int) -> list:
+    """
+    Build the GAI interval grid over ``[0, max_value]``.
+
+    The number of intervals follows the utility heuristic |X| ~= 3 * e^eps + 2,
+    so higher privacy budgets (larger epsilon) allow a finer grid. The chosen
+    number of points is then spread evenly (integer-valued) across the domain.
+    """
+    count = max(2, round(3 * math.exp(epsilon) + 2))
+    step = max_value / (count - 1)
+    return [round(i * step) for i in range(count)]
+
+
 def gai_discretise(u: int, v: int, x: int) -> int:  ### change u to lower and v to upper, use more verbose code?
     if u == v:
         return u

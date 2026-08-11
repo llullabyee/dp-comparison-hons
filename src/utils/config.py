@@ -7,6 +7,7 @@ RAW_DIR = DATA_DIR / 'raw'
 PREPROCESS_DIR = DATA_DIR / 'preprocess'
 ANALYSIS_DIR = PROJECT_ROOT / 'analysis'
 RESULT_DIR = PROJECT_ROOT / 'results'
+CSV_DIR = RESULT_DIR / 'csvs'
 SRC_DIR = PROJECT_ROOT / 'src'
 UTIL_DIR = SRC_DIR / 'utils'
 

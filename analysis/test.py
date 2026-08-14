@@ -14,13 +14,13 @@ from src.mechanisms.dplm import dplm_mechanism
 from src.utils.config import (
     ANALYSIS_DIR,
     PREPROCESS_DIR,
-    RESULT_DIR
+    RESULT_DIR,
+    EPSILON,
+    DOMAIN_MAX
 )
 
 
 # %%
-EPSILON = 1.0
-DOMAIN_MAX = 11100
 # |X| ~= 3 * e^eps + 2 intervals spread across [0, DOMAIN_MAX].
 interval_list = build_interval_list(EPSILON, DOMAIN_MAX)
 excess = 0
@@ -36,6 +36,6 @@ for df, meter_id, filename, day in load_data(PREPROCESS_DIR):
     gai_meter_dir, gai_result_fp = make_meter_dir((RESULT_DIR / 'csvs', meter_id, 'gai'), filename)
     dplm_result_dir, dplm_result_fp = make_meter_dir((RESULT_DIR / 'csvs', meter_id, 'dplm'), filename)
     gai_mechanism(df, interval_list, EPSILON)
-    df[['perturbed']].to_csv(gai_result_fp, index=False)
+    df[['gai_noise']].to_csv(gai_result_fp, index=False)
     excess = dplm_mechanism(df, 0.98, 0.10, 1500, excess)
-    df[['power_noisy']].to_csv(dplm_result_fp, index=False)
+    df[['dplm_noise']].to_csv(dplm_result_fp, index=False)

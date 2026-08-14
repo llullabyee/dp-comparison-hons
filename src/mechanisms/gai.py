@@ -85,5 +85,39 @@ def gai_mechanism(df: pd.DataFrame, interval_list: list, epsilon: float) -> pd.S
     other[other >= pos] += 1
     result_idx = np.where(keep, pos, other)
 
-    df["perturbed"] = intervals[result_idx]
-    return df["perturbed"]
+    df["gai_noise"] = intervals[result_idx]
+    return df["gai_noise"]
+
+
+def gai_estimate(perturbed, interval_list: list, epsilon: float) -> float:
+    """
+    Debiased aggregate estimate for GAI-perturbed data (Gai et al. 2022, Sec 5.4).
+
+    k-RR outputs are categorical "votes", so summing the perturbed values
+    directly is biased towards the domain midpoint. This inverts the noise to
+    recover each grid value's true frequency and reports the estimated total.
+
+        Phi(X_j) = [C(X_j) * (|X| - 1 + e^eps) - n] / (e^eps - 1)
+        R        = sum_j  X_j * Phi(X_j)
+
+    where C(X_j) is the observed count of grid value X_j and n is the number of
+    perturbed records. `interval_list` and `epsilon` must match those used to
+    perturb the data.
+
+    Returns the estimated total (R). Note Phi values are unbiased frequency
+    estimates and may individually be negative or non-integer.
+    """
+    intervals = np.asarray(interval_list)
+    values = np.asarray(perturbed)
+    n = values.size
+    k = intervals.size
+    exp_eps = math.exp(epsilon)
+
+    # C(X_j): observed count of each grid value (values not on the grid -> 0).
+    counts = np.zeros(k, dtype=np.int64)
+    pos = np.searchsorted(intervals, values)
+    on_grid = (pos < k) & (intervals[np.clip(pos, 0, k - 1)] == values)
+    np.add.at(counts, pos[on_grid], 1)
+
+    phi = (counts * (k - 1 + exp_eps) - n) / (exp_eps - 1)
+    return float(np.sum(intervals * phi))

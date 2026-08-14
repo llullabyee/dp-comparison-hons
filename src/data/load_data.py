@@ -2,6 +2,8 @@ import os
 import glob
 import pandas as pd
 from datetime import datetime, timedelta
+import re
+
 
 def make_meter_dir(parts, filename):
     if isinstance(parts, (str, os.PathLike)):
@@ -14,6 +16,7 @@ def make_meter_dir(parts, filename):
 
 
 def load_data(directory, subfolder=None):
+    pattern = re.compile(r'^\d{4}-\d{2}-\d{2}\.csv$')
     if isinstance(directory, (str, os.PathLike)):
         base = directory
     else:
@@ -23,5 +26,8 @@ def load_data(directory, subfolder=None):
         search_dir = os.path.join(meter_dir, subfolder) if subfolder else meter_dir
         for filepath in sorted(glob.glob(os.path.join(search_dir, '*.csv'))):
             filename = os.path.basename(filepath)
+            if not pattern.match(filename):
+                yield pd.read_csv(filepath), meter_id, filename
+                continue
             day = datetime.strptime(filename, '%Y-%m-%d.csv').date()
             yield pd.read_csv(filepath), meter_id, filename, day

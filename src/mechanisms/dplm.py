@@ -63,5 +63,5 @@ def dplm_mechanism(df: DataFrame, norm_prob: float, max_error: float,
             carry = 0.0
         noisy_values[i] = value
 
-    df["power_noisy"] = noisy_values
+    df["dplm_noise"] = noisy_values
     return carry

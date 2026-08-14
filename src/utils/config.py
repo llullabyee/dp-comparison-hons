@@ -11,6 +11,10 @@ CSV_DIR = RESULT_DIR / 'csvs'
 SRC_DIR = PROJECT_ROOT / 'src'
 UTIL_DIR = SRC_DIR / 'utils'
 
+
+EPSILON = 1.0
+DOMAIN_MAX = 11100
+
 def load_config(config_path: str | Path = None) -> dict:
     path = Path(config_path) if config_path else PROJECT_ROOT / "config" / "config.yaml"
     with open(path, "r") as f:

@@ -8,10 +8,11 @@ import glob
 import pandas as pd
 from src.utils.appliance_map import get_appliance_name, APPLIANCE_MAP
 
+from src.utils.config import (
+    RAW_DIR,
+    PREPROCESS_DIR,
+)
 
-DATA_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'eco'))
-RAW_DIR = os.path.join(DATA_DIR, 'raw')
-PREPROCESS_DIR = os.path.join(DATA_DIR, 'preprocess')
 
 
 def get_plug_data(filepath: str, appliance_no: str, meter_id: str):

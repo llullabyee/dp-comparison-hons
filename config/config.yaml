@@ -5,5 +5,5 @@ project:
   output_dir: results/
 
 privacy:
-#  interval_list: 
   epsilon: 2.0
+  intervals: [0,10,20,30,40,50,60,70,80,90,100]

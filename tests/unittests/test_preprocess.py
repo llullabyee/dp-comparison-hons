@@ -5,7 +5,7 @@ import unittest
 import pandas as pd
 from unittest.mock import patch
 
-import src.utils.preprocess as pp
+import src.data.preprocess as pp
 
 
 # ---------------------------------------------------------------------------

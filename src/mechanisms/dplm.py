@@ -7,7 +7,7 @@ why is there a standard deviation that does not line up with either of the varia
 
 import math
 import numpy as np
-from pandas import DataFrame
+import pandas as pd
 from scipy.stats import norm
 
 
@@ -23,8 +23,8 @@ def dplm_noise(curr_reading: int, norm_prob: float, max_error: float, peak: int,
     return noise
 
 
-def dplm_mechanism(df: DataFrame, norm_prob: float, max_error: float,
-                   peak: int, excess: int = 0, num_readings: int = 1) -> float:
+def dplm_mechanism(df: pd.DataFrame, norm_prob: float, max_error: float,
+                   peak: int, excess: int = 0, num_readings: int = 1) -> tuple[pd.Series, float]:
     """
     Apply DPLM noise to every row of `df`, with peak clipping and
     excess carry-over into the next reading.
@@ -38,6 +38,7 @@ def dplm_mechanism(df: DataFrame, norm_prob: float, max_error: float,
     excess carry-over (an inherently sequential recurrence) is looped, and
     that loop now does plain arithmetic with no per-row scipy/print overhead.
     """
+    df = df.copy()
     readings = df["power"].to_numpy(dtype=float)
 
     # z_score / scale factor are constant across rows -> compute once.
@@ -64,4 +65,4 @@ def dplm_mechanism(df: DataFrame, norm_prob: float, max_error: float,
         noisy_values[i] = value
 
     df["dplm_noise"] = noisy_values
-    return carry
+    return df['dplm_noise'], carry

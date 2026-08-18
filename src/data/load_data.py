@@ -6,14 +6,14 @@ from pathlib import Path
 import re
 
 
-def make_meter_dir(parts, filename):
+def make_dirs(parts, filename):
     if isinstance(parts, (str, os.PathLike)):
-        meter_dir = os.path.join(parts)
+        dir = os.path.join(parts)
     else:
-        meter_dir = os.path.join(*parts)
-    os.makedirs(meter_dir, exist_ok=True)
-    meter_fp = os.path.join(meter_dir, filename)
-    return meter_dir, meter_fp
+        dir = os.path.join(*parts)
+    os.makedirs(dir, exist_ok=True)
+    fp = os.path.join(dir, filename)
+    return dir, fp
 
 
 # def load_data(directory, subfolder=None):
@@ -33,6 +33,6 @@ def make_meter_dir(parts, filename):
 #             day = datetime.strptime(filename, '%Y-%m-%d.csv').date()
 #             yield pd.read_csv(filepath), meter_id, filename, day
 
-def load_data(preprocess_dir):
-    for fp in sorted(Path(preprocess_dir).glob('*.parquet')):
+def load_data(directory: str|Path) -> tuple[pd.DataFrame, str, str]:
+    for fp in sorted(Path(directory).glob('*.parquet')):
         yield pd.read_parquet(fp), fp.stem, fp.name

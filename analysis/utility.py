@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-from src.data.load_data import load_data, make_meter_dir
+from src.data.load_data import load_data, make_dirs
 from src.mechanisms.gai import build_boundary_list, gai_estimate
 from src.utils.config import CSV_DIR, PREPROCESS_DIR, EPSILON, DOMAIN_MAX
 
@@ -30,9 +30,9 @@ def main():
 
         if perturb_meter_id != prev_meter:
             if prev_meter is not None:
-                _, util_sum_fp = make_meter_dir((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_total.csv")
+                _, util_sum_fp = make_dirs((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_total.csv")
                 pd.DataFrame(meter_sum_rows, columns=COLUMNS).to_csv(util_sum_fp, index=False)
-                _, util_smape_fp = make_meter_dir((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_SMAPE_mean.csv")
+                _, util_smape_fp = make_dirs((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_SMAPE_mean.csv")
                 pd.DataFrame(smape_mean_rows, columns=['day', 'mean_smape']).to_csv(util_smape_fp, index=False)
             prev_meter = perturb_meter_id
             meter_sum_rows = []
@@ -57,7 +57,7 @@ def main():
         smape_df = pd.Series(smape, name='smape').to_frame()
 
 
-        _, util_smape_fp = make_meter_dir(
+        _, util_smape_fp = make_dirs(
             (CSV_DIR, prev_meter, 'utility', 'smape'),
             f"{Path(perturb_filename).stem}_SMAPE.csv"
         )
@@ -68,9 +68,9 @@ def main():
 
     # flush the last meter
     if prev_meter is not None:
-        _, util_sum_fp = make_meter_dir((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_total.csv")
+        _, util_sum_fp = make_dirs((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_total.csv")
         pd.DataFrame(meter_sum_rows, columns=COLUMNS).to_csv(util_sum_fp, index=False)
-        _, util_smape_fp = make_meter_dir((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_SMAPE_mean.csv")
+        _, util_smape_fp = make_dirs((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_SMAPE_mean.csv")
         pd.DataFrame(smape_mean_rows, columns=['day', 'mean_smape']).to_csv(util_smape_fp, index=False)
 
 

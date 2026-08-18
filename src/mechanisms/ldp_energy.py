@@ -16,6 +16,29 @@ def return_bounds_snap(column, intervals, interval_size):
     return lower, upper
 
 
+def return_bounds_snap(column, intervals, interval_size):
+    """Always assigns to the interval [intervals[idx-1], intervals[idx]],
+    even for values landing exactly on a boundary — no zero-width exact case.
+    Exception: a value of 0 is always mapped to (0, 0), overriding the
+    'first level' assumption noted below.
+    """
+    column = np.asarray(column, dtype=float)
+
+    idx = np.searchsorted(intervals, column, side="left")
+    idx = np.clip(idx, 1, interval_size - 1)  # ensure idx-1 is valid, and idx never falls on the last point alone
+
+    lower = intervals[idx - 1]
+    upper = intervals[idx]
+
+    # value of 0 gets its own (0, 0) bucket rather than being folded into
+    # the first interval
+    is_zero = (column == 0)
+    lower = np.where(is_zero, 0, lower)
+    upper = np.where(is_zero, 0, upper)
+
+    return lower, upper
+
+
 def label_intervals(boundaries: list) -> dict:
     return {
         i + 1: (boundaries[i], boundaries[i + 1])
@@ -23,29 +46,47 @@ def label_intervals(boundaries: list) -> dict:
     }
 
 
-def return_levels(lower, boundaries):
-    idx_of_lower = np.searchsorted(boundaries, lower, side="left")
-    return idx_of_lower + 1
+# def return_levels(lower, boundaries):
+#     idx_of_lower = np.searchsorted(boundaries, lower, side="left")
+#     return idx_of_lower + 1
 
+
+def return_levels(lower, upper, boundaries):
+    """Maps (lower, upper) bound pairs back to their interval level index.
+    Exception: if both lower and upper are 0, return level 0.
+    """
+    lower = np.asarray(lower, dtype=float)
+    upper = np.asarray(upper, dtype=float)
+    idx_of_lower = np.searchsorted(boundaries, lower, side="left")
+    levels = idx_of_lower + 1
+    is_zero = (lower == 0) & (upper == 0)
+    levels = np.where(is_zero, 0, levels)
+
+    return levels
 
 def ldp_energy_discretise(df: pd.DataFrame, boundary_list: list) -> tuple[pd.DataFrame, int]:
     boundaries = np.asarray(boundary_list)
     num_levels = boundaries.size - 1
-    level_df = pd.DataFrame(0, index=df.index, columns=[e.name for e in ApplianceList])
+    dtype = np.min_scalar_type(num_levels)  # smallest uint dtype that fits num_levels
 
-    common_cols = level_df.columns.intersection(df.columns)
+    appliance_cols = [e.value for e in ApplianceList]
+    common_cols = df.columns.intersection(appliance_cols)
     for column in common_cols:
         col = df[column].to_numpy()
-        lower, _ = return_bounds_snap(col,boundaries,num_levels)
-        levels = return_levels(lower, boundaries)
-        level_df[column] = levels
+        lower, upper = return_bounds_snap(col, boundaries, num_levels)
+        levels = return_levels(lower, upper, boundaries)
+        df[column] = levels.astype(dtype, copy=False)
+
+    level_df = df.reindex(columns=appliance_cols, fill_value=0)
+    level_df[appliance_cols] = level_df[appliance_cols].astype(dtype, copy=False)
+
     return level_df, num_levels
 
 
 def ldp_energy_encode_vectorise(df: pd.DataFrame, num_levels: int) -> pd.DataFrame:
     for column in df.columns:
         df[column] = pd.Categorical(df[column], categories=range(1, num_levels + 1))
-    return pd.get_dummies(df, columns=list(df.columns)).astype(int)
+    return pd.get_dummies(df, columns=list(df.columns)).astype('uint8')
 
 
 def ldp_energy_randomise(df: pd.DataFrame, epsilon_column: str, eps_cols: list) -> pd.DataFrame:
@@ -191,10 +232,16 @@ def ldp_budget_absorption(df: pd.DataFrame, eps_cols: list, epsilon: float, wind
     return out
 
 
-def concatenate_bits(df: pd.DataFrame, eps_cols: list) -> pd.Series:
-    bit_cols = [c for c in df.columns if c not in eps_cols]
-    return df[bit_cols].astype(str).agg(''.join, axis=1).rename('ldp_energy_noise')
+# def concatenate_bits(df: pd.DataFrame, eps_cols: list) -> pd.Series:
+#     bit_cols = [c for c in df.columns if c not in eps_cols]
+#     return df[bit_cols].astype(str).agg(''.join, axis=1).rename('ldp_energy_noise')
 
+def concatenate_bits(df: pd.DataFrame) -> pd.Series:
+    arr = df.to_numpy(dtype=np.uint8) + ord('0')
+    n_cols = arr.shape[1]
+    raw = arr.tobytes()
+    strings = np.frombuffer(raw, dtype=f'S{n_cols}')
+    return pd.Series(strings, index=df.index, name='ldp_energy_noise')
 
 def ldp_energy_mechanism(mechanism: str, df: pd.DataFrame, epsilon: float, window_size: int, boundary_list: list, excess: int = 0) -> tuple[pd.DataFrame, int]:
     df = df.copy()

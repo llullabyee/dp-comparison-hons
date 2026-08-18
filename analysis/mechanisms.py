@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from src.data.load_data import load_data, make_meter_dir
+from src.data.load_data import load_data, make_dirs
 from src.mechanisms.ldp_energy import EPSILON_COLUMNS, concatenate_bits, ldp_energy_mechanism
 from src.utils.config import load_config
 from src.mechanisms.gai import gai_mechanism, build_boundary_list
@@ -37,9 +37,9 @@ for df, meter_id, filename in load_data(PREPROCESS_DIR):
     # prev_meter = meter_id
 
     print(f"\rProcessing file for meter {meter_id}", end='', flush=True)
-    perturbed_meter_dir, perturbed_result_fp = make_meter_dir((RESULT_DIR / 'perturbed'), filename)
+    perturbed_meter_dir, perturbed_result_fp = make_dirs((RESULT_DIR / 'perturbed'), filename)
 
-    #dplm_result_dir, dplm_result_fp = make_meter_dir((RESULT_DIR / 'csvs', meter_id, 'dplm'), filename)
+    #dplm_result_dir, dplm_result_fp = make_dirs((RESULT_DIR / 'csvs', meter_id, 'dplm'), filename)
     gai_series = gai_mechanism(df, boundary_list, EPSILON)
     dplm_series = dplm_mechanism(df, 0.98, 0.10, 1500)
     timestamps = df['timestamp']

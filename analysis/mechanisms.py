@@ -29,21 +29,23 @@ excess = 0
 prev_day = None
 prev_meter = None
 
-for df, meter_id, filename, day in load_data(PREPROCESS_DIR):
-    if meter_id != prev_meter or (prev_day is not None and day != prev_day + timedelta(days=1)):
-        dplm_excess = 0
-        ldp_energy_excess = 0
-    prev_day = day
-    prev_meter = meter_id
+for df, meter_id, filename in load_data(PREPROCESS_DIR):
+    # if meter_id != prev_meter or (prev_day is not None and day != prev_day + timedelta(days=1)):
+    #     dplm_excess = 0
+    #     ldp_energy_excess = 0
+    # prev_day = day
+    # prev_meter = meter_id
 
-    print(f"\rProcessing file {filename} for meter {meter_id}", end='', flush=True)
-    perturbed_meter_dir, perturbed_result_fp = make_meter_dir((RESULT_DIR / 'csvs', meter_id, 'perturbed'), filename)
+    print(f"\rProcessing file for meter {meter_id}", end='', flush=True)
+    perturbed_meter_dir, perturbed_result_fp = make_meter_dir((RESULT_DIR / 'perturbed'), filename)
 
     #dplm_result_dir, dplm_result_fp = make_meter_dir((RESULT_DIR / 'csvs', meter_id, 'dplm'), filename)
     gai_series = gai_mechanism(df, boundary_list, EPSILON)
-    dplm_series, dplm_excess = dplm_mechanism(df, 0.98, 0.10, 1500, dplm_excess)
-    ldp_energy_df, ldp_energy_excess = ldp_energy_mechanism('LSP', df, EPSILON, WINDOW_SIZE, boundary_list, ldp_energy_excess)
-    ldp_energy_series = concatenate_bits(ldp_energy_df, EPSILON_COLUMNS)
-    perturbed_df = pd.concat([gai_series, dplm_series, ldp_energy_series], axis = 1)
+    dplm_series = dplm_mechanism(df, 0.98, 0.10, 1500)
+    timestamps = df['timestamp']
+    days = df['day']
+    # ldp_energy_df, ldp_energy_excess = ldp_energy_mechanism('LSP', df, EPSILON, WINDOW_SIZE, boundary_list, ldp_energy_excess)
+    # ldp_energy_series = concatenate_bits(ldp_energy_df, EPSILON_COLUMNS)
+    perturbed_df = pd.concat([timestamps, days, gai_series, dplm_series], axis = 1)
 #    df[['gai_noise']].to_csv(gai_result_fp, index=False)
-    perturbed_df.to_csv(perturbed_result_fp, index=False)
+    perturbed_df.to_parquet(perturbed_result_fp, index=False, compression='snappy')

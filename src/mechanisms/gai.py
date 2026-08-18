@@ -36,7 +36,7 @@ def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.S
     df = df.copy()
     boundaries = np.asarray(boundary_list)
     n_int = boundaries.size
-    power = df["power"].to_numpy()
+    power = df["mains"].to_numpy()
     n = power.size
 
     lower, upper = return_bounds(power, boundaries, n_int)

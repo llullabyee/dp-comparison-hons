@@ -24,7 +24,7 @@ def dplm_noise(curr_reading: int, norm_prob: float, max_error: float, peak: int,
 
 
 def dplm_mechanism(df: pd.DataFrame, norm_prob: float, max_error: float,
-                   peak: int, excess: int = 0, num_readings: int = 1) -> tuple[pd.Series, float]:
+                   peak: int, num_readings: int = 1) -> tuple[pd.Series, float]:
     """
     Apply DPLM noise to every row of `df`, with peak clipping and
     excess carry-over into the next reading.
@@ -39,7 +39,7 @@ def dplm_mechanism(df: pd.DataFrame, norm_prob: float, max_error: float,
     that loop now does plain arithmetic with no per-row scipy/print overhead.
     """
     df = df.copy()
-    readings = df["power"].to_numpy(dtype=float)
+    readings = df["mains"].to_numpy(dtype=float)
 
     # z_score / scale factor are constant across rows -> compute once.
     z_score = norm.interval(norm_prob)[1]
@@ -54,8 +54,12 @@ def dplm_mechanism(df: pd.DataFrame, norm_prob: float, max_error: float,
     # Sequential excess carry-over recurrence (cannot be vectorised due to the
     # reset-on-underflow clamp), but this is now cheap scalar arithmetic.
     noisy_values = np.empty_like(base)
-    carry = float(excess)
+    carry = 0
     for i in range(base.shape[0]):
+        if np.isnan(base[i]):
+            noisy_values[i] = np.nan
+            carry = 0.0                   # don't carry across a gap
+            continue
         value = base[i] + carry
         if value >= peak:
             carry = value - peak
@@ -65,4 +69,4 @@ def dplm_mechanism(df: pd.DataFrame, norm_prob: float, max_error: float,
         noisy_values[i] = value
 
     df["dplm_noise"] = noisy_values
-    return df['dplm_noise'], carry
+    return df['dplm_noise']

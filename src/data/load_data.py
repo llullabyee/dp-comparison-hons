@@ -1,12 +1,8 @@
 import os
-import glob
-import pandas as pd
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from datetime import datetime, timedelta
 from pathlib import Path
-import re
-
 
 def make_dirs(parts, filename):
     if isinstance(parts, (str, os.PathLike)):
@@ -24,4 +20,4 @@ def make_dirs(parts, filename):
 def load_data(directory: str | Path) -> Iterator[tuple[pa.Table, str, str]]:
     """Yield (table, meter, day) — one day-file at a time."""
     for fp in sorted(Path(directory).glob('*/*.parquet')):
-        yield pq.read_table(fp), fp.parent.name, fp.stem
+        yield pq.read_table(fp), fp.parent.name, np.datetime64(fp.stem, 'D')

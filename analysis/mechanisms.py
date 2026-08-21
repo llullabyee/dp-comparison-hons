@@ -1,10 +1,8 @@
 # %%
-from datetime import timedelta
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import numpy as np
-import pandas as pd
 
 from src.data.load_data import load_data, make_dirs
 from src.mechanisms.ldp_energy import concatenate_bits, ldp_energy_mechanism
@@ -39,21 +37,21 @@ for (tbl, meter_id, day), \
     print(day)
     assert (meter_id, day) == (ldp_meter_id, ldp_day), \
             f"Misaligned: mains=({meter_id}, {day}) vs appliances=({ldp_meter_id}, {ldp_day})"
-    if meter_id != prev_meter or (prev_day is not None and day != prev_day + timedelta(days=1)):
+    if meter_id != prev_meter or (prev_day is not None and day != prev_day + np.timedelta64(1, 'D')):
         dplm_excess = 0
         ldp_energy_excess = 0
     prev_day = day
     prev_meter = meter_id
 
     print(f"\rProcessing file for meter {meter_id}", end='', flush=True)
-    perturbed_meter_dir, perturbed_result_fp = make_dirs((RESULT_DIR / 'perturbed' / meter_id), f'{day}.parquet')
+    perturbed_meter_dir, perturbed_result_fp = make_dirs((RESULT_DIR / 'perturbed' / meter_id), f'{str(day)}.parquet')
 
-    readings = tbl.column('mains').to_numpy(zero_copy_only=False).astype(float)
+    mains_readings = tbl.column('mains').to_numpy(zero_copy_only=False).astype(float)
 
     #dplm_result_dir, dplm_result_fp = make_dirs((RESULT_DIR / 'csvs', meter_id, 'dplm'), filename)
-    gai_noise = gai_mechanism(readings, boundary_list, EPSILON)
-    dplm_noise, dplm_excess = dplm_mechanism(readings, 0.98, EPSILON, DOMAIN_MAX, 1500, dplm_excess)
-    # ldp_energy_LBU, ldp_energy_excess = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
+    gai_noise = gai_mechanism(mains_readings, boundary_list, EPSILON)
+    dplm_noise, dplm_excess = dplm_mechanism(mains_readings, 0.98, EPSILON, DOMAIN_MAX, 1500, excess=dplm_excess)
+    ldp_energy_LBU, ldp_energy_excess = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
     # ldp_energy_LSP = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
     # ldp_energy_LBD = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
     # ldp_energy_LBA = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
@@ -63,10 +61,9 @@ for (tbl, meter_id, day), \
 
     perturbed_tbl = pa.table({
         'timestamp': tbl.column('timestamp'),
-        'day': tbl.column('day'),
         'gai_noise': gai_noise,
         'dplm_noise': dplm_noise,
-        # 'ldp_energy_LBU': ldp_energy_LBU,
+        'ldp_energy_LBU': ldp_energy_LBU,
         # 'ldp_energy_LSP': ldp_energy_LSP,
         # 'ldp_energy_LBD': ldp_energy_LBD,
         # 'ldp_energy_LBA': ldp_energy_LBA

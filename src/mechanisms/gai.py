@@ -1,9 +1,8 @@
 import math
 import numpy as np
-import pandas as pd
 
 
-def build_boundary_list(epsilon: float, max_value: int) -> list:
+def build_boundary_list(epsilon: float, max_value: int) -> np.ndarray:
     """
     Build the GAI interval grid over ``[0, max_value]``.
 
@@ -13,7 +12,7 @@ def build_boundary_list(epsilon: float, max_value: int) -> list:
     """
     count = max(2, round(3 * math.exp(epsilon) + 2))
     step = max_value / (count - 1)
-    return [round(i * step) for i in range(count)]
+    return np.asarray([round(i * step) for i in range(count)])
 
 
 def return_bounds(column, boundaries, interval_size):
@@ -25,7 +24,7 @@ def return_bounds(column, boundaries, interval_size):
     return lower, upper
 
 
-def gai_mechanism(readings: np.ndarray, boundary_list: list, epsilon: float) -> np.ndarray:
+def gai_mechanism(readings: np.ndarray, boundaries: np.ndarray, epsilon: float) -> np.ndarray:
     """
     Vectorised GAI mechanism.
 
@@ -33,7 +32,6 @@ def gai_mechanism(readings: np.ndarray, boundary_list: list, epsilon: float) -> 
     ``find_bounds`` -> ``gai_discretise`` -> ``gai_perturb`` row-by-row, but
     computed over the whole column with numpy instead of per-row Python loops.
     """
-    boundaries = np.asarray(boundary_list)
     n_int = boundaries.size
     n = readings.size
 

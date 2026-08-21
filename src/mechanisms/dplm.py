@@ -7,8 +7,6 @@ why is there a standard deviation that does not line up with either of the varia
 
 import math
 import numpy as np
-import pyarrow as pa
-import pandas as pd
 from scipy.stats import norm
 
 from src.utils.config import DOMAIN_MAX

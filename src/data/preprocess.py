@@ -69,7 +69,6 @@ def preprocess_user(meter_dir: str) -> int:
     # ----------------------------------------------------------------------
     os.makedirs(PREPROCESS_DIR / 'mains', exist_ok=True)
     out_fp = os.path.join(PREPROCESS_DIR / 'mains', f'{meter_id}.parquet')
-    df = df.fillna(0)
     df.to_parquet(out_fp, index=False, compression='snappy')
 
     print(f'{meter_id}: {len(df):,} rows '
@@ -80,6 +79,7 @@ def preprocess_user(meter_dir: str) -> int:
 def preprocess_binary_vector(boundary_list: list):
     os.makedirs(PREPROCESS_DIR / 'appliances', exist_ok=True)
     for df, _, filename in load_data(PREPROCESS_DIR / 'mains'):
+        df = df.fillna(0)
         print(filename)
         timestamps = df['timestamp']
         days = df['day']
@@ -96,10 +96,10 @@ def preprocess_binary_vector(boundary_list: list):
 
 
 def main():
-    # global_max = 0
-    # for meter_dir in sorted(glob.glob(os.path.join(RAW_DIR, 'sm_*'))):
-    #     global_max = max(global_max, preprocess_user(meter_dir))
-    # print('global mains max:', global_max)
+    global_max = 0
+    for meter_dir in sorted(glob.glob(os.path.join(RAW_DIR, 'sm_*'))):
+        global_max = max(global_max, preprocess_user(meter_dir))
+    print('global mains max:', global_max)
     boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
     preprocess_binary_vector(boundary_list)
 

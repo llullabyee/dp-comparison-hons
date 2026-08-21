@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
+from src.utils.config import DOMAIN_MAX
+
 
 def dplm_noise(curr_reading: int, norm_prob: float, max_error: float, peak: int, num_readings: int = 1, mean: float = 0):
     error_Wh = max_error * curr_reading
@@ -23,8 +25,8 @@ def dplm_noise(curr_reading: int, norm_prob: float, max_error: float, peak: int,
     return noise
 
 
-def dplm_mechanism(df: pd.DataFrame, norm_prob: float, max_error: float,
-                   peak: int, num_readings: int = 1) -> tuple[pd.Series, float]:
+def dplm_mechanism(df: pd.DataFrame, norm_prob: float, epsilon: float, sensitivity: float,
+                   peak: int, num_readings: int = 1) -> pd.Series:
     """
     Apply DPLM noise to every row of `df`, with peak clipping and
     excess carry-over into the next reading.
@@ -38,17 +40,19 @@ def dplm_mechanism(df: pd.DataFrame, norm_prob: float, max_error: float,
     excess carry-over (an inherently sequential recurrence) is looped, and
     that loop now does plain arithmetic with no per-row scipy/print overhead.
     """
-    df = df.copy()
     readings = df["mains"].to_numpy(dtype=float)
 
     # z_score / scale factor are constant across rows -> compute once.
     z_score = norm.interval(norm_prob)[1]
-    scale_factor = (max_error / z_score) / math.sqrt(2 * num_readings)
-    laplace_scale = np.abs(readings) * scale_factor
+    print(z_score)
+    laplace_scale = sensitivity / epsilon
+    max_error_percent = (sensitivity * z_score * math.sqrt(2 * num_readings)) / (epsilon * peak)
+    max_error_watts = max_error_percent * peak
+    print(f" Max Error in W: {max_error_watts} | Max Error Percentage: {max_error_percent}")
+    # scale_factor = (max_error / z_score) / math.sqrt(2 * num_readings)
+    print(f"Scale: {laplace_scale}")
 
-    noise = np.random.laplace(loc=0.0, scale=laplace_scale)
-    np.minimum(noise, peak, out=noise)  # per-reading noise clip (matches dplm_noise)
-
+    noise = np.random.laplace(loc=0.0, scale=laplace_scale, size=readings.shape)
     base = readings + noise  # reading + (clipped) noise, before excess carry
 
     # Sequential excess carry-over recurrence (cannot be vectorised due to the
@@ -67,6 +71,4 @@ def dplm_mechanism(df: pd.DataFrame, norm_prob: float, max_error: float,
         else:
             carry = 0.0
         noisy_values[i] = value
-
-    df["dplm_noise"] = noisy_values
-    return df['dplm_noise']
+    return pd.Series(noisy_values, name='dplm_noise')

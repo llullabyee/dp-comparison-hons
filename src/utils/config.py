@@ -13,7 +13,7 @@ UTIL_DIR = SRC_DIR / 'utils'
 
 
 EPSILON = 1.0
-DOMAIN_MAX = 11100
+DOMAIN_MAX = 3000
 WINDOW_SIZE = 3
 
 def load_config(config_path: str | Path = None) -> dict:

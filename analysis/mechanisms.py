@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.data.load_data import load_data, make_dirs
-from src.mechanisms.ldp_energy import EPSILON_COLUMNS, concatenate_bits, ldp_energy_mechanism
+from src.mechanisms.ldp_energy import concatenate_bits, ldp_energy_mechanism
 from src.utils.config import load_config
 from src.mechanisms.gai import gai_mechanism, build_boundary_list
 from src.mechanisms.dplm import dplm_mechanism
@@ -44,8 +44,12 @@ for df, meter_id, filename in load_data(PREPROCESS_DIR / 'mains'):
     dplm_series = dplm_mechanism(df, 0.98, EPSILON, DOMAIN_MAX, 1500)
     timestamps = df['timestamp']
     days = df['day']
-    # ldp_energy_df, ldp_energy_excess = ldp_energy_mechanism('LSP', df, EPSILON, WINDOW_SIZE, boundary_list, ldp_energy_excess)
-    # ldp_energy_series = concatenate_bits(ldp_energy_df, EPSILON_COLUMNS)
+    print('gai dplm done fr')
+    df = pd.read_parquet(PREPROCESS_DIR / 'appliances' / filename)
+    print('yo?')
+    ldp_energy_df = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
+    print('surely')
+    ldp_energy_series = concatenate_bits(ldp_energy_df)
     perturbed_df = pd.concat([timestamps, days, gai_series, dplm_series], axis = 1)
 #    df[['gai_noise']].to_csv(gai_result_fp, index=False)
     perturbed_df.to_parquet(perturbed_result_fp, index=False, compression='snappy')

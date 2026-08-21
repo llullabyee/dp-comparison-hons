@@ -1,3 +1,4 @@
+from numpy._core import uint8
 import pyarrow as pa
 import pyarrow.parquet as pq
 import math
@@ -5,7 +6,7 @@ import numpy as np
 import pandas as pd
 from src.utils.appliance_map import ApplianceList
 
-EPSILON_COLUMNS = ['LBU', 'LSP', 'eps_t2']
+NON_BIT_COLS = ['timestamp', 'day']
 
 # def return_bounds_snap(column, intervals, interval_size):
 #     """Always assigns to the interval [intervals[idx-1], intervals[idx]],
@@ -66,6 +67,7 @@ def return_levels(lower, upper, boundaries):
 
     return levels
 
+
 def ldp_energy_discretise(df: pd.DataFrame, boundary_list: list) -> tuple[pd.DataFrame, int]:
     boundaries = np.asarray(boundary_list)
     num_levels = boundaries.size - 1
@@ -91,33 +93,44 @@ def ldp_energy_encode_vectorise(df: pd.DataFrame, num_levels: int) -> pd.DataFra
     return pd.get_dummies(df, columns=list(df.columns)).astype('uint8')
 
 
-def ldp_energy_randomise(binary_vector: np.ndarray, epsilon_arr: np.ndarray) -> np.ndarray:
-    p_prob = 1/2
-    q_prob = (1 / (1 + np.exp(epsilon_arr)))
+# def ldp_energy_randomise(binary_vector: np.ndarray, epsilon_arr: np.ndarray) -> np.ndarray:
+#     p_prob = 1/2
+#     q_prob = (1 / (1 + np.exp(epsilon_arr)))
 
-    rand = np.random.random(binary_vector.shape)
-    perturbed = np.where(
+#     rand = np.random.random(binary_vector.shape)
+#     perturbed = np.where(
+#         binary_vector == 1,
+#         (rand < p_prob).astype(int),
+#         (rand < q_prob).astype(int)
+#     )
+#     return perturbed
+
+def ldp_probability(epsilon):
+    q_prob = (1 / (1 + np.exp(epsilon)))
+    return q_prob
+
+
+def ldp_budget_uniform(epsilon: float,
+                       window_size: int) -> float:
+    return epsilon / window_size
+
+
+def ldp_energy_randomise(binary_vector, epsilon_arr) -> np.ndarray:
+    q_prob = ldp_probability(epsilon_arr)
+    print('q_prob calculated?')
+    rand = np.random.random(binary_vector.shape[0])
+    print('somethings happening')
+    return np.where(
         binary_vector == 1,
-        (rand < p_prob).astype(int),
-        (rand < q_prob).astype(int)
-    )
-    return perturbed
-
-def ldp_budget_uniform(binary_vector: np.ndarray, epsilon: float, window_size: int) -> np.ndarray:
-    epsilon_value = epsilon / window_size
-    epsilon_arr = np.full_like(binary_vector, epsilon_value)
-    return epsilon_arr
+        rand < 0.5,
+        rand < q_prob,
+    ).astype('uint8')
 
 
-def ldp_sampling_method(binary_vector: np.ndarray, epsilon: float, window_size: int, excess: int = 0) -> np.ndarray:
-    sampling_timestamps = np.arange(0, 86400, window_size)
-
-    epsilon_arr = np.where(
-        np.isin(np.arange(binary_vector.size), sampling_timestamps),
-        epsilon,
-        0
-    )
-    return epsilon_arr
+def ldp_sampling_method(binary_vector: np.ndarray, epsilon: float, window_size: int) -> np.ndarray:
+    n = binary_vector.shape[0]
+    epsilon_arr = np.where(np.arange(n) % window_size == 0, epsilon, 0.0)
+    return epsilon_arr[:, None]
 
 
 # def oue_perturb_vector(c, eps):
@@ -233,16 +246,20 @@ def concatenate_bits(df: pd.DataFrame) -> pd.Series:
     return pd.Series(strings, index=df.index, name='ldp_energy_noise')
 
 def ldp_energy_mechanism(mechanism: str, df: pd.DataFrame, epsilon: float, window_size: int):
-    bin_vector_arr = df['ldp_energy_noise'].to_numpy()
+    bit_cols = [c for c in df.columns if c not in NON_BIT_COLS]
+    bin_vector_arr = df[bit_cols].to_numpy()
 
     match mechanism:
         case 'LBU':
-            epsilon_arr = ldp_budget_uniform(bin_vector_arr, epsilon, window_size)
-            df['ldp_energy_noise'] = ldp_energy_randomise(bin_vector_arr, epsilon_arr)
+            epsilon = ldp_budget_uniform(epsilon, window_size)
+            print('epsilon done')
+            df[bit_cols] = ldp_energy_randomise(bin_vector_arr, epsilon)
+            print('bitcols done?')
             return df
-        # case 'LSP':
-        #     df, excess = ldp_sampling_method(df, epsilon, window_size, excess=excess)
-        #     return ldp_energy_randomise(df, epsilon_column='LSP', eps_cols=EPSILON_COLUMNS), excess
+        case 'LSP':
+            epsilon_arr = ldp_sampling_method(bin_vector_arr, epsilon, window_size)
+            df[bit_cols] = ldp_energy_randomise(bin_vector_arr, epsilon_arr)
+            return df
         # case 'LBD':
         #     return ldp_budget_distribution(df, eps_cols=EPSILON_COLUMNS, epsilon=epsilon, window_size=window_size), excess
         # case 'LBA':

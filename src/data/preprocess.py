@@ -88,9 +88,9 @@ def preprocess_binary_vector(boundary_list: list):
         print('we cooked')
         df = ldp_energy_encode_vectorise(df, num_levels)
         print('surely')
-        bit_vectors = concatenate_bits(df)
+        # bit_vectors = concatenate_bits(df)
         print('aint no way')
-        df = pd.concat([timestamps, days, bit_vectors], axis=1)
+        df = pd.concat([timestamps, days, df], axis=1)
         out_fp = PREPROCESS_DIR / 'appliances' / filename
         df.to_parquet(out_fp, index=False, compression='snappy')
 

@@ -1,8 +1,8 @@
 # %%
-import os
-import math
-import glob
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 import numpy as np
 import pandas as pd
 
@@ -29,27 +29,49 @@ excess = 0
 prev_day = None
 prev_meter = None
 
-for df, meter_id, filename in load_data(PREPROCESS_DIR / 'mains'):
-    # if meter_id != prev_meter or (prev_day is not None and day != prev_day + timedelta(days=1)):
-    #     dplm_excess = 0
-    #     ldp_energy_excess = 0
-    # prev_day = day
-    # prev_meter = meter_id
+mains_gen = load_data(PREPROCESS_DIR / 'mains')
+appliances_gen = load_data(PREPROCESS_DIR / 'appliances')
+
+for (tbl, meter_id, day), \
+    (ldp_tbl, ldp_meter_id, ldp_day) \
+    in  zip(mains_gen, appliances_gen, strict=True
+):
+    print(day)
+    assert (meter_id, day) == (ldp_meter_id, ldp_day), \
+            f"Misaligned: mains=({meter_id}, {day}) vs appliances=({ldp_meter_id}, {ldp_day})"
+    if meter_id != prev_meter or (prev_day is not None and day != prev_day + timedelta(days=1)):
+        dplm_excess = 0
+        ldp_energy_excess = 0
+    prev_day = day
+    prev_meter = meter_id
 
     print(f"\rProcessing file for meter {meter_id}", end='', flush=True)
-    perturbed_meter_dir, perturbed_result_fp = make_dirs((RESULT_DIR / 'perturbed'), filename)
+    perturbed_meter_dir, perturbed_result_fp = make_dirs((RESULT_DIR / 'perturbed' / meter_id), f'{day}.parquet')
+
+    readings = tbl.column('mains').to_numpy(zero_copy_only=False).astype(float)
 
     #dplm_result_dir, dplm_result_fp = make_dirs((RESULT_DIR / 'csvs', meter_id, 'dplm'), filename)
-    gai_series = gai_mechanism(df, boundary_list, EPSILON)
-    dplm_series = dplm_mechanism(df, 0.98, EPSILON, DOMAIN_MAX, 1500)
-    timestamps = df['timestamp']
-    days = df['day']
-    print('gai dplm done fr')
-    df = pd.read_parquet(PREPROCESS_DIR / 'appliances' / filename)
-    print('yo?')
-    ldp_energy_df = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
+    gai_noise = gai_mechanism(readings, boundary_list, EPSILON)
+    dplm_noise, dplm_excess = dplm_mechanism(readings, 0.98, EPSILON, DOMAIN_MAX, 1500, dplm_excess)
+    # ldp_energy_LBU, ldp_energy_excess = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
+    # ldp_energy_LSP = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
+    # ldp_energy_LBD = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
+    # ldp_energy_LBA = ldp_energy_mechanism('LBU', df, EPSILON, WINDOW_SIZE)
+
     print('surely')
-    ldp_energy_series = concatenate_bits(ldp_energy_df)
-    perturbed_df = pd.concat([timestamps, days, gai_series, dplm_series], axis = 1)
-#    df[['gai_noise']].to_csv(gai_result_fp, index=False)
-    perturbed_df.to_parquet(perturbed_result_fp, index=False, compression='snappy')
+    # ldp_energy_series = concatenate_bits(ldp_energy_df)
+
+    perturbed_tbl = pa.table({
+        'timestamp': tbl.column('timestamp'),
+        'day': tbl.column('day'),
+        'gai_noise': gai_noise,
+        'dplm_noise': dplm_noise,
+        # 'ldp_energy_LBU': ldp_energy_LBU,
+        # 'ldp_energy_LSP': ldp_energy_LSP,
+        # 'ldp_energy_LBD': ldp_energy_LBD,
+        # 'ldp_energy_LBA': ldp_energy_LBA
+    })
+    pq.write_table(perturbed_tbl, perturbed_result_fp)
+#     perturbed_df = pd.concat([timestamps, days, gai_series, dplm_series], axis = 1)
+#     df[['gai_noise']].to_csv(gai_result_fp, index=False)
+#     perturbed_df.to_parquet(perturbed_result_fp, index=False, compression='snappy')

@@ -25,7 +25,7 @@ def return_bounds(column, boundaries, interval_size):
     return lower, upper
 
 
-def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.Series:
+def gai_mechanism(readings: np.ndarray, boundary_list: list, epsilon: float) -> np.ndarray:
     """
     Vectorised GAI mechanism.
 
@@ -33,19 +33,17 @@ def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.S
     ``find_bounds`` -> ``gai_discretise`` -> ``gai_perturb`` row-by-row, but
     computed over the whole column with numpy instead of per-row Python loops.
     """
-    df = df.copy()
     boundaries = np.asarray(boundary_list)
     n_int = boundaries.size
-    power = df["mains"].to_numpy()
-    n = power.size
+    n = readings.size
 
-    lower, upper = return_bounds(power, boundaries, n_int)
+    lower, upper = return_bounds(readings, boundaries, n_int)
 
     # ---- gai_discretise ------------------------------------------------------
     # choose upper with prob (x - lower) / (upper - lower), else lower.
     span = (upper - lower).astype(float)
     with np.errstate(divide="ignore", invalid="ignore"):
-        v_prob = np.where(span > 0, (power - lower) / span, 0.0)
+        v_prob = np.where(span > 0, (readings - lower) / span, 0.0)
     discretised = np.where(np.random.random(n) < v_prob, upper, lower)
 
     # ---- gai_perturb ---------------------------------------------------------
@@ -62,8 +60,7 @@ def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.S
     other[other >= pos] += 1
     result_idx = np.where(keep, pos, other)
 
-    df["gai_noise"] = boundaries[result_idx]
-    return df["gai_noise"]
+    return boundaries[result_idx]
 
 
 def gai_estimate(perturbed, boundary_list: list, epsilon: float) -> float:

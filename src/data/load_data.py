@@ -17,6 +17,5 @@ def make_dirs(parts, filename):
 #     for fp in sorted(Path(directory).glob('*.parquet')):
 #         yield pd.read_parquet(fp), fp.stem, fp.name
 
-def load_data(fp: Path) -> Iterator[tuple[pa.Table, str, str]]:
-    """Yield (table, meter, day) — one day-file at a time."""
-        yield pq.read_table(fp), fp.parent.name, np.datetime64(fp.stem, 'D')
+def load_data(fp: Path) -> tuple[pa.Table, str, np.datetime64]:
+    return pq.read_table(fp), fp.parent.name, np.datetime64(fp.stem, 'D')

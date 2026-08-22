@@ -15,6 +15,7 @@ UTIL_DIR = SRC_DIR / 'utils'
 EPSILON = 1.0
 DOMAIN_MAX = 3000
 WINDOW_SIZE = 3
+PEAK = 1500
 
 def load_config(config_path: str | Path = None) -> dict:
     path = Path(config_path) if config_path else PROJECT_ROOT / "config" / "config.yaml"

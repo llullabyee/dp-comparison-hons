@@ -1,22 +1,9 @@
 from numpy._core import uint8
 import pyarrow as pa
 import pyarrow.parquet as pq
-import math
 import numpy as np
 import pandas as pd
 from src.utils.appliance_map import ApplianceList
-
-NON_BIT_COLS = ['timestamp', 'day']
-
-# def return_bounds_snap(column, intervals, interval_size):
-#     """Always assigns to the interval [intervals[idx-1], intervals[idx]],
-#     even for values landing exactly on a boundary — no zero-width exact case."""
-#     idx = np.searchsorted(intervals, column, side="left")
-#     idx = np.clip(idx, 1, interval_size - 1)  # ensure idx-1 is valid, and idx never falls on the last point alone
-#     # note: Shanmugarasa never mention what level a value of 0 holds. This assumes a value of 0 is given the first level.
-#     lower = intervals[idx - 1]
-#     upper = intervals[idx]
-#     return lower, upper
 
 
 def return_bounds_snap(column, intervals, interval_size):
@@ -42,11 +29,11 @@ def return_bounds_snap(column, intervals, interval_size):
     return lower, upper
 
 
-def label_intervals(boundaries: list) -> dict:
-    return {
-        i + 1: (boundaries[i], boundaries[i + 1])
-        for i in range(len(boundaries) - 1)
-    }
+# def label_intervals(boundaries: list) -> dict:
+#     return {
+#         i + 1: (boundaries[i], boundaries[i + 1])
+#         for i in range(len(boundaries) - 1)
+#     }
 
 
 # def return_levels(lower, boundaries):
@@ -68,29 +55,43 @@ def return_levels(lower, upper, boundaries):
     return levels
 
 
-def ldp_energy_discretise(df: pd.DataFrame, boundary_list: list) -> tuple[pd.DataFrame, int]:
-    boundaries = np.asarray(boundary_list)
+def ldp_energy_discretise(tbl: pa.Table, boundaries: np.ndarray) -> tuple[pa.Table, int, int]:
     num_levels = boundaries.size - 1
     dtype = np.min_scalar_type(num_levels)  # smallest uint dtype that fits num_levels
+    num_rows = tbl.num_rows
 
-    appliance_cols = [e.value for e in ApplianceList]
-    common_cols = df.columns.intersection(appliance_cols)
+    appliance_names = [member.value for member in ApplianceList]
+    common_cols = [name for name in tbl.column_names if name in appliance_names]
+
+    discretised = {}
     for column in common_cols:
-        col = df[column].to_numpy()
+        col = tbl.column(column).to_numpy()
         lower, upper = return_bounds_snap(col, boundaries, num_levels)
         levels = return_levels(lower, upper, boundaries)
-        df[column] = levels.astype(dtype, copy=False)
+        discretised[column] = levels.astype(dtype, copy=False)
 
-    level_df = df.reindex(columns=appliance_cols, fill_value=0)
-    level_df[appliance_cols] = level_df[appliance_cols].astype(dtype, copy=False)
+    discretised = {
+        name: discretised[name] if name in discretised else np.full(num_rows, 0, dtype=dtype)
+        for name in appliance_names
+    }
 
-    return level_df, num_levels
+    return pa.table(discretised), num_levels, num_rows
 
 
-def ldp_energy_encode_vectorise(df: pd.DataFrame, num_levels: int) -> pd.DataFrame:
-    for column in df.columns:
-        df[column] = pd.Categorical(df[column], categories=range(1, num_levels + 1))
-    return pd.get_dummies(df, columns=list(df.columns)).astype('uint8')
+def ldp_energy_encode_vectorise(tbl: pa.Table, num_levels: int, num_rows: int) -> pa.Table:
+    result = {}
+    for column in tbl.column_names:
+        levels = tbl.column(column).to_numpy()  # 0 = missing/not-present, 1..num_levels = valid level
+        one_hot = np.zeros((num_rows, num_levels), dtype='uint8')
+
+        valid = levels > 0
+        row_idx = np.arange(num_rows)[valid]
+        col_idx = levels[valid] - 1
+        one_hot[row_idx, col_idx] = 1
+
+        for level in range(num_levels):
+            result[f'{column}_{level + 1}'] = one_hot[:, level]
+    return pa.table(result)
 
 
 # def ldp_energy_randomise(binary_vector: np.ndarray, epsilon_arr: np.ndarray) -> np.ndarray:
@@ -105,6 +106,7 @@ def ldp_energy_encode_vectorise(df: pd.DataFrame, num_levels: int) -> pd.DataFra
 #     )
 #     return perturbed
 
+
 def ldp_probability(epsilon):
     q_prob = (1 / (1 + np.exp(epsilon)))
     return q_prob
@@ -115,11 +117,9 @@ def ldp_budget_uniform(epsilon: float,
     return epsilon / window_size
 
 
-def ldp_energy_randomise(binary_vector, epsilon_arr) -> np.ndarray:
+def ldp_energy_randomise(binary_vector: np.ndarray, epsilon_arr: float|np.ndarray) -> np.ndarray:
     q_prob = ldp_probability(epsilon_arr)
-    print('q_prob calculated?')
-    rand = np.random.random(binary_vector.shape[0])
-    print('somethings happening')
+    rand = np.random.random(binary_vector.shape)
     return np.where(
         binary_vector == 1,
         rand < 0.5,
@@ -133,165 +133,35 @@ def ldp_sampling_method(binary_vector: np.ndarray, epsilon: float, window_size: 
     return epsilon_arr[:, None]
 
 
-# def oue_perturb_vector(c, eps):
-#     p_prob = 0.5
-#     q_prob = 1 / (1 + np.exp(eps))
-#     rand = np.random.random(len(c))
-#     return np.where(c == 1, (rand < p_prob).astype(int), (rand < q_prob).astype(int))
-
-
-def ldp_budget_distribution(df: pd.DataFrame, epsilon: float, window_size: int) -> pd.DataFrame:
-    binary_vector_size = len(df["B"].iloc[0])
-    init_vector = np.zeros(binary_vector_size, dtype=np.uint8)
-
-    C = np.stack(df["B"].to_numpy()).astype(np.uint8)
-    pass
-
-# def ldp_budget_distribution(df: pd.DataFrame, eps_cols: list, epsilon: float, window_size: int) -> pd.DataFrame:
-#     bit_cols = [c for c in df.columns if c not in eps_cols]
-#     w = window_size
-#     d = len(bit_cols)
-#     n = len(df)
-
-#     binary_vector = df[bit_cols].values.astype(float)
-
-#     released = np.zeros((n, d))
-#     eps2_history = np.zeros(n)
-#     r_l = np.zeros(d)
-
-#     for t in range(n):
-#         c_t = binary_vector[t]
-
-#         eps_t1 = epsilon / (2 * w)
-#         c_bar_t1 = oue_perturb_vector(c_t, eps_t1)
-#         dis = np.mean((c_bar_t1 - r_l) ** 2)
-
-#         window_start = max(0, t - w + 1)
-#         eps_rm = epsilon / 2 - eps2_history[window_start:t].sum()
-#         eps_t2 = eps_rm / 2
-#         c_bar_t2 = oue_perturb_vector(c_t, eps_t2)
-#         err = np.mean((c_bar_t2 - c_t) ** 2)
-
-#         if dis > err:
-#             r_t = c_bar_t2
-#             eps2_history[t] = eps_t2
-#         else:
-#             r_t = r_l
-#             eps2_history[t] = 0
-
-#         released[t] = r_t
-#         r_l = r_t
-
-#     out = pd.DataFrame(released, columns=bit_cols, index=df.index)
-#     out['eps_t2'] = eps2_history
-#     return out
-
-
-def ldp_budget_absorption(df: pd.DataFrame, eps_cols: list, epsilon: float, window_size: int) -> pd.DataFrame:
-    bit_cols = [c for c in df.columns if c not in eps_cols]
-    w = window_size
-    d = len(bit_cols)
-    n = len(df)
-    eps_base = epsilon / (2 * w)
-
-    binary_vector = df[bit_cols].values.astype(float)
-
-    released = np.zeros((n, d))
-    eps2_history = np.zeros(n)
-    r_l = np.zeros(d)
-    l = 0
-    eps_l2 = 0.0
-
-    for t in range(n):
-        c_t = binary_vector[t]
-
-        c_bar_t1 = oue_perturb_vector(c_t, eps_base)
-        dis = np.mean((c_bar_t1 - r_l) ** 2)
-
-        t_N = (eps_l2 / eps_base) - 1 if eps_base > 0 else 0
-
-        if t - l <= t_N:
-            r_t = r_l
-        else:
-            t_A = t - (l + t_N)
-            eps_t2 = eps_base * min(t_A, w)
-            c_bar_t2 = oue_perturb_vector(c_t, eps_t2)
-            err = np.mean((c_bar_t2 - c_t) ** 2)
-
-            if dis > err:
-                r_t = c_bar_t2
-                l = t
-                eps_l2 = eps_t2
-                eps2_history[t] = eps_t2
-            else:
-                r_t = r_l
-
-        released[t] = r_t
-        r_l = r_t
-
-    out = pd.DataFrame(released, columns=bit_cols, index=df.index)
-    out['eps_t2'] = eps2_history
-    return out
-
-
-# def concatenate_bits(df: pd.DataFrame, eps_cols: list) -> pd.Series:
-#     bit_cols = [c for c in df.columns if c not in eps_cols]
-#     return df[bit_cols].astype(str).agg(''.join, axis=1).rename('ldp_energy_noise')
-
-def concatenate_bits(df: pd.DataFrame) -> pd.Series:
+def concatenate_bits(binary_vector: np.ndarray) -> pd.Series:
     arr = df.to_numpy(dtype=np.uint8) + ord('0')
     n_cols = arr.shape[1]
     raw = arr.tobytes()
     strings = np.frombuffer(raw, dtype=f'S{n_cols}')
     return pd.Series(strings, index=df.index, name='ldp_energy_noise')
 
-def ldp_energy_mechanism(mechanism: str, df: pd.DataFrame, epsilon: float, window_size: int):
-    bit_cols = [c for c in df.columns if c not in NON_BIT_COLS]
-    bin_vector_arr = df[bit_cols].to_numpy()
+
+def ldp_energy_mechanism(mechanism: str, tbl: pa.Table, epsilon: float, window_size: int, excess: int = 0):
+    timestamp = tbl.column('timestamp')
+    tbl = tbl.drop_columns(['timestamp'])
+    bin_vector_arr = np.column_stack([tbl.column(name).to_numpy() for name in tbl.column_names])
 
     match mechanism:
         case 'LBU':
-            epsilon = ldp_budget_uniform(epsilon, window_size)
-            print('epsilon done')
-            df[bit_cols] = ldp_energy_randomise(bin_vector_arr, epsilon)
-            print('bitcols done?')
-            return df
+            eps = ldp_budget_uniform(epsilon, window_size)
+            perturbed = ldp_energy_randomise(bin_vector_arr, eps)
         case 'LSP':
             epsilon_arr = ldp_sampling_method(bin_vector_arr, epsilon, window_size)
-            df[bit_cols] = ldp_energy_randomise(bin_vector_arr, epsilon_arr)
-            return df
-        # case 'LBD':
-        #     return ldp_budget_distribution(df, eps_cols=EPSILON_COLUMNS, epsilon=epsilon, window_size=window_size), excess
-        # case 'LBA':
-        #     return ldp_budget_absorption(df, eps_cols=EPSILON_COLUMNS, epsilon=epsilon, window_size=window_size), excess
+            perturbed = ldp_energy_randomise(bin_vector_arr, epsilon_arr)
+        case 'LBD':
+            pass
+        case 'LBA':
+            pass
         case _:
             raise ValueError(f"Unknown mechanism: {mechanism}")
 
-
-def ldp_energy_server(perturbed_list: list, epsilon: float, num_appliances: int, num_levels: int) -> list:
-
-    chunks = [
-        pd.DataFrame({
-            i: perturbed_list.str[i*num_levels:(i+1)*num_levels]
-            for i in range(num_appliances)
-        })
-        for series in perturbed_list
-    ]
-
-    p = 0.5
-    q = 1 / (1 + np.exp(epsilon))
-    d = len(chunks)  # number of users
-
-    results = []
-    for i in range(num_appliances):
-        user_bits = np.stack([
-            np.array(chunks[u][i].apply(lambda s: [int(b) for b in s]).tolist())
-            for u in range(d)
-        ])  # shape (d, n_rows, num_levels)
-
-        y = user_bits.sum(axis=0)  # shape (n_rows, num_levels)
-        estimated = (y - d * q) / (p - q)
-
-        results.append(pd.DataFrame(estimated, index=chunks[0].index))
-
-    return results
+    perturbed_tbl = pa.table({
+        'timestamp': timestamp,
+        **{name: perturbed[:, i] for i, name in enumerate(tbl.column_names)}
+    })
+    return perturbed_tbl

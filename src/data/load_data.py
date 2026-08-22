@@ -1,10 +1,8 @@
 import os
-import glob
-import pandas as pd
-from datetime import datetime, timedelta
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pathlib import Path
-import re
-
 
 def make_dirs(parts, filename):
     if isinstance(parts, (str, os.PathLike)):
@@ -15,24 +13,10 @@ def make_dirs(parts, filename):
     fp = os.path.join(dir, filename)
     return dir, fp
 
+# def load_data(directory: str|Path) -> tuple[pd.DataFrame, str, str]:
+#     for fp in sorted(Path(directory).glob('*.parquet')):
+#         yield pd.read_parquet(fp), fp.stem, fp.name
 
-# def load_data(directory, subfolder=None):
-#     pattern = re.compile(r'^\d{4}-\d{2}-\d{2}\.csv$')
-#     if isinstance(directory, (str, os.PathLike)):
-#         base = directory
-#     else:
-#         base = os.path.join(*directory)
-#     for meter_dir in sorted(glob.glob(os.path.join(base, 'sm_*'))):
-#         meter_id = os.path.basename(meter_dir)
-#         search_dir = os.path.join(meter_dir, subfolder) if subfolder else meter_dir
-#         for filepath in sorted(glob.glob(os.path.join(search_dir, '*.csv'))):
-#             filename = os.path.basename(filepath)
-#             if not pattern.match(filename):
-#                 yield pd.read_csv(filepath), meter_id, filename
-#                 continue
-#             day = datetime.strptime(filename, '%Y-%m-%d.csv').date()
-#             yield pd.read_csv(filepath), meter_id, filename, day
-
-def load_data(directory: str|Path) -> tuple[pd.DataFrame, str, str]:
-    for fp in sorted(Path(directory).glob('*.parquet')):
-        yield pd.read_parquet(fp), fp.stem, fp.name
+def load_data(fp: Path) -> Iterator[tuple[pa.Table, str, str]]:
+    """Yield (table, meter, day) — one day-file at a time."""
+        yield pq.read_table(fp), fp.parent.name, np.datetime64(fp.stem, 'D')

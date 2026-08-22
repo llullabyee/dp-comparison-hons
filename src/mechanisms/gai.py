@@ -1,9 +1,7 @@
-import math
 import numpy as np
-import pandas as pd
 
 
-def build_boundary_list(epsilon: float, max_value: int) -> list:
+def build_boundary_list(epsilon: float, max_value: int) -> np.ndarray:
     """
     Build the GAI interval grid over ``[0, max_value]``.
 
@@ -11,9 +9,9 @@ def build_boundary_list(epsilon: float, max_value: int) -> list:
     so higher privacy budgets (larger epsilon) allow a finer grid. The chosen
     number of points is then spread evenly (integer-valued) across the domain.
     """
-    count = max(2, round(3 * math.exp(epsilon) + 2))
+    count = max(2, round(3 * np.exp(epsilon) + 2))
     step = max_value / (count - 1)
-    return [round(i * step) for i in range(count)]
+    return np.asarray([round(i * step) for i in range(count)])
 
 
 def return_bounds(column, boundaries, interval_size):
@@ -25,7 +23,7 @@ def return_bounds(column, boundaries, interval_size):
     return lower, upper
 
 
-def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.Series:
+def gai_mechanism(readings: np.ndarray, boundaries: np.ndarray, epsilon: float) -> np.ndarray:
     """
     Vectorised GAI mechanism.
 
@@ -33,25 +31,22 @@ def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.S
     ``find_bounds`` -> ``gai_discretise`` -> ``gai_perturb`` row-by-row, but
     computed over the whole column with numpy instead of per-row Python loops.
     """
-    df = df.copy()
-    boundaries = np.asarray(boundary_list)
     n_int = boundaries.size
-    power = df["mains"].to_numpy()
-    n = power.size
+    n = readings.size
 
-    lower, upper = return_bounds(power, boundaries, n_int)
+    lower, upper = return_bounds(readings, boundaries, n_int)
 
     # ---- gai_discretise ------------------------------------------------------
     # choose upper with prob (x - lower) / (upper - lower), else lower.
     span = (upper - lower).astype(float)
     with np.errstate(divide="ignore", invalid="ignore"):
-        v_prob = np.where(span > 0, (power - lower) / span, 0.0)
+        v_prob = np.where(span > 0, (readings - lower) / span, 0.0)
     discretised = np.where(np.random.random(n) < v_prob, upper, lower)
 
     # ---- gai_perturb ---------------------------------------------------------
     # keep true value with prob p = e^eps / (n_int - 1 + e^eps),
     # otherwise pick uniformly among the other n_int - 1 intervals.
-    exp_eps = math.exp(epsilon)
+    exp_eps = np.exp(epsilon)
     p_prob = exp_eps / (n_int - 1 + exp_eps)
 
     pos = np.searchsorted(boundaries, discretised)  # index of each discretised value
@@ -62,8 +57,7 @@ def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.S
     other[other >= pos] += 1
     result_idx = np.where(keep, pos, other)
 
-    df["gai_noise"] = boundaries[result_idx]
-    return df["gai_noise"]
+    return boundaries[result_idx]
 
 
 def gai_estimate(perturbed, boundary_list: list, epsilon: float) -> float:
@@ -88,7 +82,7 @@ def gai_estimate(perturbed, boundary_list: list, epsilon: float) -> float:
     values = np.asarray(perturbed)
     n = values.size
     k = boundaries.size
-    exp_eps = math.exp(epsilon)
+    exp_eps = np.exp(epsilon)
 
     # C(X_j): observed count of each grid value (values not on the grid -> 0).
     counts = np.zeros(k, dtype=np.int64)

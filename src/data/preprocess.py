@@ -70,6 +70,7 @@ def preprocess_user(meter_dir: str) -> float:
     os.makedirs(out_dir, exist_ok=True)
 
     meter_max = 0.0
+    nan_count = 0
     for raw_fp in day_fps:
         tbl, day = load_day(raw_fp, meter_id)
         pq.write_table(tbl, out_dir / f'{day}.parquet', compression='snappy')
@@ -77,30 +78,41 @@ def preprocess_user(meter_dir: str) -> float:
         day_max = pc.max(tbl.column('mains')).as_py()
         meter_max = max(meter_max, day_max or 0.0)
 
+        nan_count += pc.sum(pc.is_nan(tbl.column('mains'))).as_py()
+        print(f'{meter_id}/{day}: {nan_count:,} NaN mains readings')
+
     print(f'{meter_id}: {len(day_fps):,} days -> {out_dir}')
     return meter_max
 
 def preprocess_binary_vector(boundary_list: np.ndarray):
-    for tbl, meter_id, day in load_data(PREPROCESS_DIR / 'mains'):
-        out_dir = PREPROCESS_DIR / 'appliances' / meter_id
-        os.makedirs(out_dir, exist_ok=True)
+    mains_dir = PREPROCESS_DIR / 'mains'
+    meter_dirs = sorted(d for d in mains_dir.iterdir() if d.is_dir())
+    days = sorted(fp.stem for fp in meter_dirs[0].glob('*.parquet'))
+    for meter_dir in meter_dirs:
+        for day in days:
+            fp = meter_dir / f'{day}.parquet'
+            if not fp.exists():
+                continue
+            tbl, meter_id, day = load_data(fp)
+            out_dir = PREPROCESS_DIR / 'appliances' / meter_id
+            os.makedirs(out_dir, exist_ok=True)
 
-        timestamps = tbl.column('timestamp')
+            timestamps = tbl.column('timestamp')
 
-        dropped = tbl.drop_columns(['timestamp'])
-        values = pa.table({
-            name: pc.fill_null(dropped.column(name), 0)
-            for name in dropped.column_names
-        })
-        values, num_levels, num_rows = ldp_energy_discretise(values, boundary_list)
-        values = ldp_energy_encode_vectorise(values, num_levels, num_rows)
+            dropped = tbl.drop_columns(['timestamp'])
+            values = pa.table({
+                name: pc.fill_null(dropped.column(name), 0)
+                for name in dropped.column_names
+            })
+            values, num_levels, num_rows = ldp_energy_discretise(values, boundary_list)
+            values = ldp_energy_encode_vectorise(values, num_levels, num_rows)
 
-        out = pa.table({
-            'timestamp': timestamps,
-            **{name: values.column(name) for name in values.column_names}
-        })
-        pq.write_table(out, out_dir / f'{day}.parquet', compression='snappy')
-        print(f'{meter_id}/{day}: {out.num_columns - 1} bit columns -> {out_dir}')
+            out = pa.table({
+                'timestamp': timestamps,
+                **{name: values.column(name) for name in values.column_names}
+            })
+            pq.write_table(out, out_dir / f'{day}.parquet', compression='snappy')
+            print(f'{meter_id}/{day}: {out.num_columns - 1} bit columns -> {out_dir}')
 
 def main():
     global_max = 0.0

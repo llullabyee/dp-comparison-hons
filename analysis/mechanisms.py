@@ -10,7 +10,7 @@ from pathlib import Path
 
 from src.data.load_data import load_data
 from src.mechanisms.ldp_energy import concatenate_bits, ldp_energy_mechanism
-from src.mechanisms.gai import gai_mechanism, build_boundary_list
+from src.mechanisms.gai import gai_aggregate, gai_mechanism, build_boundary_list
 from src.mechanisms.dplm import dplm_mechanism
 
 from src.utils.config import (
@@ -65,8 +65,9 @@ for day in days:
         if appliance_filepath.exists():
             app_tbl, app_meter, _ = load_data(appliance_filepath)
             loaded_appliances[meter] = app_tbl
-
-    for meter_id, tbl in loaded_mains:
+# %%
+    for meter_id, tbl in loaded_mains.items():
+        dplm_excess = 0
         mains_readings = tbl.column('mains').to_numpy(zero_copy_only=False).astype(float)
         gai_values = gai_mechanism(mains_readings, boundary_list, EPSILON)
         dplm_values, dplm_excess = dplm_mechanism(mains_readings, 0.98, EPSILON, DOMAIN_MAX, 1500, excess=dplm_excess)
@@ -77,8 +78,24 @@ for day in days:
             'dplm_noise': dplm_values,
         })
         perturbed_mains[meter_id] = perturbed_tbl
-    # gai estimator code goes here, taking in perturbed_mains
 
+    # gai estimator code goes here, taking in perturbed_mains
+    print(meter_dirs)
+    print(loaded_mains.keys())
+    print(perturbed_mains.keys())
+    combined_noise = np.column_stack([
+        table.column("gai_noise").to_numpy()
+        for table in perturbed_mains.values()
+    ])
+    print(combined_noise)
+    freq_arr, debiased_freq_arr , total_power_consumption = gai_aggregate(combined_noise,boundary_list,EPSILON)
+    freq_tbl = pa.table({
+        'timestamp': next(iter(perturbed_mains.values())).column('timestamp'),
+        **{f'{b:g}': debiased_freq_arr[:, j] for j, b in enumerate(boundary_list)},
+    })
+    freq_fp = run_dir / f'{day}_gai.parquet'
+    pq.write_table(freq_tbl, freq_fp)
+    # ldp mechanisms
     for mechanism in mechanisms:
         pass
         # ldp mechanism goes here
@@ -86,7 +103,7 @@ for day in days:
         # ldp estimator goes here
 
     # table writing goes here
-
+    print(freq_arr, debiased_freq_arr, total_power_consumption)
 
 # mains_gen = load_data(PREPROCESS_DIR / 'mains')
 # appliances_gen = load_data(PREPROCESS_DIR / 'appliances')

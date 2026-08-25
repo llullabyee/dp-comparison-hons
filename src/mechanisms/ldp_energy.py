@@ -1,8 +1,8 @@
-from numpy._core import uint8
 import pyarrow as pa
 import pyarrow.parquet as pq
 import numpy as np
 import pandas as pd
+from collections import deque
 from src.utils.appliance_map import ApplianceList
 
 
@@ -112,11 +112,6 @@ def ldp_probability(epsilon):
     return q_prob
 
 
-def ldp_budget_uniform(epsilon: float,
-                       window_size: int) -> float:
-    return epsilon / window_size
-
-
 def ldp_energy_randomise(binary_vector: np.ndarray, epsilon_arr: float|np.ndarray) -> np.ndarray:
     q_prob = ldp_probability(epsilon_arr)
     rand = np.random.random(binary_vector.shape)
@@ -127,10 +122,86 @@ def ldp_energy_randomise(binary_vector: np.ndarray, epsilon_arr: float|np.ndarra
     ).astype('uint8')
 
 
+def ldp_budget_uniform(epsilon: float,
+                       window_size: int) -> float:
+    return epsilon / window_size
+
+
 def ldp_sampling_method(binary_vector: np.ndarray, epsilon: float, window_size: int) -> np.ndarray:
     n = binary_vector.shape[0]
     epsilon_arr = np.where(np.arange(n) % window_size == 0, epsilon, 0.0)
     return epsilon_arr[:, None]
+
+
+def ldp_budget_distribution(binary_vector: np.ndarray, epsilon: float, window_size: int,
+    budget_spent: deque[float], last_published_release: np.ndarray | None = None) \
+    -> tuple[np.ndarray,np.ndarray,np.ndarray]:
+    releases = []
+    budget_spent_arr = []
+    if last_published_release is None:
+        last_published_release = np.zeros(binary_vector.shape[1], dtype = 'uint8')
+    eps_t1 = epsilon / (2 * window_size)
+
+    perturbed_t1_all = ldp_energy_randomise(binary_vector, eps_t1) # vectorised for efficiency
+
+    for idx, row in enumerate(binary_vector):
+        # %% Mechanism 1
+        perturbed_row_t1 = perturbed_t1_all[idx]
+        dissimilarity = np.mean((perturbed_row_t1 - last_published_release) ** 2)
+        # %% Mechanism 2
+        eps_t2 = ((epsilon / 2) - sum(budget_spent)) / 2
+        perturbed_row_t2 = ldp_energy_randomise(row, eps_t2)
+        error = np.mean((perturbed_row_t2 - row) ** 2)
+        # %% Mechanism 3
+        if dissimilarity > error:
+            last_published_release = perturbed_row_t2
+            budget_spent.append(eps_t2)
+            budget_spent_arr.append(eps_t2)
+            releases.append(last_published_release)
+        else:
+            budget_spent.append(0)
+            budget_spent_arr.append(0)
+            releases.append(last_published_release)
+    return np.array(releases), np.array(budget_spent_arr), last_published_release
+
+
+def ldp_budget_absorption(binary_vector: np.ndarray, epsilon: float, window_size: int,
+    last_published_idx: int = 0, last_published_epsilon: float = 0,
+    last_published_release: np.ndarray | None = None) -> tuple[np.ndarray,np.ndarray]:
+    if last_published_release is None:
+        last_published_release = np.zeros(binary_vector.shape[1], dtype = 'uint8')
+    releases = []
+    budget_spent_arr = []
+    eps_t1 = epsilon / (2 * window_size)
+    perturbed_t1_all = ldp_energy_randomise(binary_vector, eps_t1) # vectorised for efficiency
+
+
+    for idx, row in enumerate(binary_vector):
+        # %% Mechanism 2
+        nullification_count = ((last_published_epsilon) / (eps_t1)) - 1
+        if nullification_count  >= ((idx+1) - last_published_idx):
+            releases.append(last_published_release)
+            budget_spent_arr.append(0)
+        else:
+            # %% Mechanism 1, reordered for efficiency.
+            perturbed_row_t1 = perturbed_t1_all[idx]
+            dissimilarity = np.mean((perturbed_row_t1 - last_published_release) ** 2)
+            # %% Mechanism 2 (again)
+            absorption_count = (idx+1) - (last_published_idx + nullification_count)
+            eps_t2 = eps_t1 * min(absorption_count, window_size)
+            perturbed_row_t2 = ldp_energy_randomise(row, eps_t2)
+            error = np.mean((perturbed_row_t2 - row) ** 2)
+            # %% Mechanism 3
+            if dissimilarity > error:
+                releases.append(perturbed_row_t2)
+                budget_spent_arr.append(eps_t2)
+                last_published_release = perturbed_row_t2
+                last_published_idx = idx+1
+                last_published_epsilon = eps_t2
+            else:
+                releases.append(last_published_release)
+                budget_spent_arr.append(0)
+    return np.array(releases), np.array(budget_spent_arr)
 
 
 def concatenate_bits(binary_vector: np.ndarray) -> pd.Series:
@@ -141,7 +212,9 @@ def concatenate_bits(binary_vector: np.ndarray) -> pd.Series:
     return pd.Series(strings, index=df.index, name='ldp_energy_noise')
 
 
-def ldp_energy_mechanism(mechanism: str, tbl: pa.Table, epsilon: float, window_size: int, excess: int = 0):
+def ldp_energy_mechanism(mechanism: str, tbl: pa.Table, epsilon: float, window_size: int,
+    last_published_idx: int, last_published_epsilon: float, last_published_release: np.ndarray,
+    budget_spent: deque[float]):
     timestamp = tbl.column('timestamp')
     tbl = tbl.drop_columns(['timestamp'])
     bin_vector_arr = np.column_stack([tbl.column(name).to_numpy() for name in tbl.column_names])
@@ -154,9 +227,10 @@ def ldp_energy_mechanism(mechanism: str, tbl: pa.Table, epsilon: float, window_s
             epsilon_arr = ldp_sampling_method(bin_vector_arr, epsilon, window_size)
             perturbed = ldp_energy_randomise(bin_vector_arr, epsilon_arr)
         case 'LBD':
-            pass
+            perturbed = ldp_budget_distribution(bin_vector_arr, epsilon, window_size, budget_spent)
         case 'LBA':
-            pass
+            perturbed = ldp_budget_absorption(bin_vector_arr, epsilon, window_size,
+                last_published_idx, last_published_epsilon, last_published_release)
         case _:
             raise ValueError(f"Unknown mechanism: {mechanism}")
 
@@ -165,3 +239,10 @@ def ldp_energy_mechanism(mechanism: str, tbl: pa.Table, epsilon: float, window_s
         **{name: perturbed[:, i] for i, name in enumerate(tbl.column_names)}
     })
     return perturbed_tbl
+
+
+def ldp_aggregate(tables: list[np.ndarray], epsilon: float, num_levels: int):
+    q_prob = ldp_probability(epsilon)
+    sums = np.sum(tables, axis=0)
+    aggregated_perturbed_values = (sums - num_levels * q_prob) / (0.5 - q_prob)
+    return aggregated_perturbed_values

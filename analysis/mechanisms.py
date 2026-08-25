@@ -1,5 +1,5 @@
 '''
-
+this code needs to be redone a bit to not do the meter dirs all at once.
 '''
 # %%
 import pyarrow as pa
@@ -7,6 +7,7 @@ import pyarrow.parquet as pq
 import numpy as np
 import os
 from pathlib import Path
+from collections import deque
 
 from src.data.load_data import load_data
 from src.mechanisms.ldp_energy import concatenate_bits, ldp_energy_mechanism
@@ -25,12 +26,6 @@ from src.utils.config import (
 
 
 # %%
-boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
-excess = 0
-prev_day = None
-prev_meter = None
-mechanisms = ['LBU','LSP','LBD','LBA']
-
 mains_dir = PREPROCESS_DIR / 'mains'
 meter_dirs = sorted(d for d in mains_dir.iterdir() if d.is_dir())
 run_dir = (RESULT_DIR / 'perturbed' / f'eps{EPSILON:g}' / f'w{WINDOW_SIZE}' /
@@ -44,6 +39,12 @@ perturbed_appliance_dirs = {d.name: run_dir / d.name / 'appliances' for d in met
 for p in perturbed_appliance_dirs.values():
     p.mkdir(parents=True, exist_ok=True)
 
+# %%
+budget_spent_dict = {d.name: deque(maxlen=WINDOW_SIZE - 1) for d in meter_dirs}
+last_published_
+boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
+last_published_idx = 0
+mechanisms = ['LBU','LSP','LBD','LBA']
 
 # %%
 days = sorted(fp.stem for fp in meter_dirs[0].glob('*.parquet'))
@@ -70,7 +71,7 @@ for day in days:
         dplm_excess = 0
         mains_readings = tbl.column('mains').to_numpy(zero_copy_only=False).astype(float)
         gai_values = gai_mechanism(mains_readings, boundary_list, EPSILON)
-        dplm_values, dplm_excess = dplm_mechanism(mains_readings, 0.98, EPSILON, DOMAIN_MAX, 1500, excess=dplm_excess)
+        dplm_values, dplm_excess = dplm_mechanism(mains_readings, 0.98, EPSILON, DOMAIN_MAX, PEAK, excess=dplm_excess)
         # important: find a way to pass every excess value through for specific smart meters.
         perturbed_tbl = pa.table({
             'timestamp': tbl.column('timestamp'),
@@ -78,26 +79,42 @@ for day in days:
             'dplm_noise': dplm_values,
         })
         perturbed_mains[meter_id] = perturbed_tbl
+        perturbed_fp = perturbed_mains_dirs[meter_id] / f'{day}.parquet'
+        pq.write_table(perturbed_tbl, perturbed_fp)
+
+        for mechanism in mechanisms:
+            ldp_noise = ldp_energy_mechanism(mechanism, tbl, EPSILON, WINDOW_SIZE)
+            pass
 
     # gai estimator code goes here, taking in perturbed_mains
-    print(meter_dirs)
-    print(loaded_mains.keys())
-    print(perturbed_mains.keys())
-    combined_noise = np.column_stack([
-        table.column("gai_noise").to_numpy()
-        for table in perturbed_mains.values()
+
+for day in days:
+    loaded_mains = {}
+    loaded_appliances = {}
+    for meter_dir, meter_dir_path in perturbed_mains_dirs.items():
+        mains_filepath = meter_dir_path / f'{day}.parquet'
+        appliances_filepath = perturbed_appliance_dirs[meter_dir] / f'{day}.parquet'
+        if not mains_filepath.exists():
+            continue
+        tbl, meter, _ = load_data(mains_filepath)
+        app_tbl, app_meter, _ = load_data(appliances_filepath)
+        loaded_mains[meter] = tbl
+        loaded_appliances[app_meter] = app_tbl
+
+    combined_mains_noise = np.column_stack([
+        noise.column("gai_noise").to_numpy()
+        for noise in loaded_mains.values()
     ])
-    print(combined_noise)
-    freq_arr, debiased_freq_arr , total_power_consumption = gai_aggregate(combined_noise,boundary_list,EPSILON)
+    freq_arr, debiased_freq_arr , total_power_consumption = gai_aggregate(combined_mains_noise,boundary_list,EPSILON)
     freq_tbl = pa.table({
         'timestamp': next(iter(perturbed_mains.values())).column('timestamp'),
         **{f'{b:g}': debiased_freq_arr[:, j] for j, b in enumerate(boundary_list)},
     })
-    freq_fp = run_dir / f'{day}_gai.parquet'
+    freq_fp = run_dir / 'gai' / f'{day}_gai.parquet'
+    Path(freq_fp).parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(freq_tbl, freq_fp)
     # ldp mechanisms
-    for mechanism in mechanisms:
-        pass
+
         # ldp mechanism goes here
 
         # ldp estimator goes here

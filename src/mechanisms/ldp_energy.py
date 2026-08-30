@@ -213,8 +213,8 @@ def concatenate_bits(binary_vector: np.ndarray) -> pd.Series:
 
 
 def ldp_energy_mechanism(mechanism: str, tbl: pa.Table, epsilon: float, window_size: int,
-    last_published_idx: int, last_published_epsilon: float, last_published_release: np.ndarray,
-    budget_spent: deque[float]):
+    last_published_idx: int, last_published_epsilon: float, budget_spent: deque[float],
+    last_published_release: np.ndarray | None = None):
     timestamp = tbl.column('timestamp')
     tbl = tbl.drop_columns(['timestamp'])
     bin_vector_arr = np.column_stack([tbl.column(name).to_numpy() for name in tbl.column_names])
@@ -227,9 +227,9 @@ def ldp_energy_mechanism(mechanism: str, tbl: pa.Table, epsilon: float, window_s
             epsilon_arr = ldp_sampling_method(bin_vector_arr, epsilon, window_size)
             perturbed = ldp_energy_randomise(bin_vector_arr, epsilon_arr)
         case 'LBD':
-            perturbed = ldp_budget_distribution(bin_vector_arr, epsilon, window_size, budget_spent)
+            perturbed, budget_spent_arr, last_published_release = ldp_budget_distribution(bin_vector_arr, epsilon, window_size, budget_spent)
         case 'LBA':
-            perturbed = ldp_budget_absorption(bin_vector_arr, epsilon, window_size,
+            perturbed, budget_spent_arr = ldp_budget_absorption(bin_vector_arr, epsilon, window_size,
                 last_published_idx, last_published_epsilon, last_published_release)
         case _:
             raise ValueError(f"Unknown mechanism: {mechanism}")
@@ -238,7 +238,7 @@ def ldp_energy_mechanism(mechanism: str, tbl: pa.Table, epsilon: float, window_s
         'timestamp': timestamp,
         **{name: perturbed[:, i] for i, name in enumerate(tbl.column_names)}
     })
-    return perturbed_tbl
+    return perturbed_tbl, last_published_idx, last_published_epsilon, budget_spent, last_published_release
 
 
 def ldp_aggregate(tables: list[np.ndarray], epsilon: float, num_levels: int):

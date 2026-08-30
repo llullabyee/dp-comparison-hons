@@ -10,10 +10,11 @@ from pathlib import Path
 from collections import deque
 
 from src.data.load_data import load_data
-from src.mechanisms.ldp_energy import concatenate_bits, ldp_energy_mechanism
+from src.mechanisms.ldp_energy import concatenate_bits, ldp_aggregate, ldp_energy_mechanism
 from src.mechanisms.gai import gai_aggregate, gai_mechanism, build_boundary_list
 from src.mechanisms.dplm import dplm_mechanism
 
+from src.utils.appliance_map import ApplianceList
 from src.utils.config import (
     ANALYSIS_DIR,
     PREPROCESS_DIR,
@@ -40,79 +41,101 @@ for p in perturbed_appliance_dirs.values():
     p.mkdir(parents=True, exist_ok=True)
 
 # %%
-budget_spent_dict = {d.name: deque(maxlen=WINDOW_SIZE - 1) for d in meter_dirs}
-last_published_
 boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
-last_published_idx = 0
+appliance_list = list(ApplianceList)
+num_levels = boundary_list.size - 1
 mechanisms = ['LBU','LSP','LBD','LBA']
-
-# %%
 days = sorted(fp.stem for fp in meter_dirs[0].glob('*.parquet'))
 
-
-for day in days:
-    loaded_mains = {}
-    loaded_appliances = {}
-    perturbed_mains = {}
-    for meter_dir in meter_dirs:
-        filepath = meter_dir / f'{day}.parquet'
-        if not filepath.exists():
-            continue
-        tbl, meter, _ = load_data(filepath)
-        loaded_mains[meter] = tbl
-
-        appliance_meter_dir = PREPROCESS_DIR / 'appliances' / meter_dir.name
-        appliance_filepath = appliance_meter_dir / f'{day}.parquet'
-        if appliance_filepath.exists():
-            app_tbl, app_meter, _ = load_data(appliance_filepath)
-            loaded_appliances[meter] = app_tbl
 # %%
-    for meter_id, tbl in loaded_mains.items():
-        dplm_excess = 0
-        mains_readings = tbl.column('mains').to_numpy(zero_copy_only=False).astype(float)
-        gai_values = gai_mechanism(mains_readings, boundary_list, EPSILON)
-        dplm_values, dplm_excess = dplm_mechanism(mains_readings, 0.98, EPSILON, DOMAIN_MAX, PEAK, excess=dplm_excess)
-        # important: find a way to pass every excess value through for specific smart meters.
-        perturbed_tbl = pa.table({
-            'timestamp': tbl.column('timestamp'),
-            'gai_noise': gai_values,
-            'dplm_noise': dplm_values,
-        })
-        perturbed_mains[meter_id] = perturbed_tbl
-        perturbed_fp = perturbed_mains_dirs[meter_id] / f'{day}.parquet'
-        pq.write_table(perturbed_tbl, perturbed_fp)
+# for meter_dir in meter_dirs:
+#     last_published_release = None
+#     last_published_idx = 0
+#     last_published_epsilon = 0
+#     dplm_excess = 0
+#     budget_spent = deque(maxlen=WINDOW_SIZE - 1)
+#     for day in days:
+#         filepath = meter_dir / f'{day}.parquet'
+#         if not filepath.exists():
+#             continue
+#         tbl, meter_id, _ = load_data(filepath)
 
-        for mechanism in mechanisms:
-            ldp_noise = ldp_energy_mechanism(mechanism, tbl, EPSILON, WINDOW_SIZE)
-            pass
+#         appliance_meter_dir = PREPROCESS_DIR / 'appliances' / meter_dir.name
+#         appliance_filepath = appliance_meter_dir / f'{day}.parquet'
+#         app_tbl, app_meter, _ = load_data(appliance_filepath)
+# # %%
+#         mains_readings = tbl.column('mains').to_numpy(zero_copy_only=False).astype(float)
+#         gai_values = gai_mechanism(mains_readings, boundary_list, EPSILON)
+#         dplm_values, dplm_excess = dplm_mechanism(mains_readings, 0.98, EPSILON, DOMAIN_MAX, PEAK, excess=dplm_excess)
+#         # important: find a way to pass every excess value through for specific smart meters.
+#         perturbed_tbl = pa.table({
+#             'timestamp': tbl.column('timestamp'),
+#             'gai_noise': gai_values,
+#             'dplm_noise': dplm_values,
+#         })
+#         perturbed_fp = perturbed_mains_dirs[meter_id] / f'{day}.parquet'
+#         pq.write_table(perturbed_tbl, perturbed_fp)
+# # %%
+#         for mechanism in mechanisms:
+#             ldp_noise, last_published_idx, last_published_epsilon, budget_spent, \
+#             last_published_release = ldp_energy_mechanism(mechanism, app_tbl, EPSILON, WINDOW_SIZE,
+#                 last_published_idx, last_published_epsilon, budget_spent,
+#                 last_published_release
+#             )
+#             perturbed_app_fp = perturbed_appliance_dirs[meter_id] / mechanism / f'{day}.parquet'
+#             perturbed_app_fp.parent.mkdir(parents=True,exist_ok=True)
+#             pq.write_table(ldp_noise, perturbed_app_fp)
+#         print(f'{day} completed for meter {meter_id}')
 
-    # gai estimator code goes here, taking in perturbed_mains
-
+# %%
 for day in days:
     loaded_mains = {}
-    loaded_appliances = {}
     for meter_dir, meter_dir_path in perturbed_mains_dirs.items():
         mains_filepath = meter_dir_path / f'{day}.parquet'
-        appliances_filepath = perturbed_appliance_dirs[meter_dir] / f'{day}.parquet'
         if not mains_filepath.exists():
             continue
         tbl, meter, _ = load_data(mains_filepath)
-        app_tbl, app_meter, _ = load_data(appliances_filepath)
         loaded_mains[meter] = tbl
-        loaded_appliances[app_meter] = app_tbl
 
     combined_mains_noise = np.column_stack([
         noise.column("gai_noise").to_numpy()
         for noise in loaded_mains.values()
     ])
-    freq_arr, debiased_freq_arr , total_power_consumption = gai_aggregate(combined_mains_noise,boundary_list,EPSILON)
-    freq_tbl = pa.table({
-        'timestamp': next(iter(perturbed_mains.values())).column('timestamp'),
+    gai_freq_arr, debiased_freq_arr , total_power_consumption = gai_aggregate(combined_mains_noise,boundary_list,EPSILON)
+    # nothing being done with gai_freq_arr rn, do something with it?
+    gai_freq_tbl = pa.table({
+        'timestamp': next(iter(loaded_mains.values())).column('timestamp'),
         **{f'{b:g}': debiased_freq_arr[:, j] for j, b in enumerate(boundary_list)},
     })
-    freq_fp = run_dir / 'gai' / f'{day}_gai.parquet'
-    Path(freq_fp).parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(freq_tbl, freq_fp)
+    gai_freq_fp = run_dir / 'gai' / f'{day}_gai.parquet'
+    Path(gai_freq_fp).parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(gai_freq_tbl, gai_freq_fp)
+
+# %%
+    for mechanism in mechanisms:
+        loaded_appliances = {}
+        aggregate_filepath = run_dir / 'appliances' / mechanism / f'{day}.parquet'
+        aggregate_filepath.parent.mkdir(parents=True, exist_ok=True)
+        for meter_id, app_dir in perturbed_appliance_dirs.items():
+            appliances_meter_filepath = app_dir / mechanism / f'{day}.parquet'
+            if not appliances_meter_filepath.exists():
+                continue
+            app_tbl, app_meter, _ = load_data(appliances_meter_filepath)
+            level_cols = [c for c in app_tbl.column_names if c != 'timestamp']
+            loaded_appliances[app_meter] = np.column_stack([
+                app_tbl.column(c).to_numpy() for c in level_cols
+            ])
+            timestamp_col = app_tbl.column('timestamp')
+        tables = list(loaded_appliances.values())
+        aggregated_perturbed_values = ldp_aggregate(tables, EPSILON, num_levels)
+        aggregated_tbl = pa.table({
+            'timestamp': timestamp_col,
+            **{
+                f'{appliance_list[i // num_levels].value}_level_{i % num_levels}': aggregated_perturbed_values[:, i]
+                for i in range(aggregated_perturbed_values.shape[1])
+            }
+        })
+        pq.write_table(aggregated_tbl, aggregate_filepath)
     # ldp mechanisms
 
         # ldp mechanism goes here
@@ -120,7 +143,6 @@ for day in days:
         # ldp estimator goes here
 
     # table writing goes here
-    print(freq_arr, debiased_freq_arr, total_power_consumption)
 
 # mains_gen = load_data(PREPROCESS_DIR / 'mains')
 # appliances_gen = load_data(PREPROCESS_DIR / 'appliances')

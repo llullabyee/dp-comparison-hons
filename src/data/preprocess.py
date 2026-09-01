@@ -10,9 +10,9 @@ import pyarrow as pa
 import pyarrow.csv as pv
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from collections import defaultdict
 
-from src.utils.appliance_map import get_appliance_name, APPLIANCE_MAP
-from src.utils.config import RAW_DIR, PREPROCESS_DIR, EPSILON, DOMAIN_MAX
+from src.utils.config import APPLIANCES_DIR, MAINS_DIR, PREPROCESS_APPS_DIR, PREPROCESS_MAINS_DIR, EPSILON, DOMAIN_MAX
 from src.mechanisms.ldp_energy import ldp_energy_discretise, ldp_energy_encode_vectorise
 from src.mechanisms.gai import build_boundary_list
 from src.data.load_data import load_data
@@ -23,105 +23,80 @@ _READ_OPTS = pv.ReadOptions(autogenerate_column_names=True)
 _CONV_OPTS = pv.ConvertOptions(include_columns=['f0'],
                                column_types={'f0': pa.float32()})
 
-def read_column(filepath: str, col_name: str) -> np.ndarray:
-    """First column of a headerless ECO csv, padded/truncated to one day."""
-    if not os.path.exists(filepath):
-        return np.full(DAY_SECONDS, np.nan, dtype='float32')
-    tbl = pv.read_csv(filepath, read_options=_READ_OPTS, convert_options=_CONV_OPTS)
-    arr = tbl.column('f0').to_numpy(zero_copy_only=False).astype('float32')
-    if len(arr) >= DAY_SECONDS:
-        return arr[:DAY_SECONDS]
-    return np.pad(arr, (0, DAY_SECONDS - len(arr)), constant_values=np.nan)
+def preprocess_data():
+    PREPROCESS_MAINS_DIR.mkdir(parents=True, exist_ok=True)
+    PREPROCESS_APPS_DIR.mkdir(parents=True, exist_ok=True)
 
+    for file in MAINS_DIR.iterdir():
+        home_id = file.stem.split('_')[0]
+        appliances = list(APPLIANCES_DIR.glob(f"{home_id}_*.csv"))
+        if not appliances:
+            continue
 
-def get_plug_data(filepath: str, appliance_no: str, meter_id: str) -> tuple[str, np.ndarray]:
-    dirname, filename = os.path.split(filepath)
-    parts = dirname.split(os.sep)
-    parts = [p.replace('sm', 'plug') if p.startswith('sm_') else p for p in parts]
-    new_filepath = os.path.join(os.sep.join(parts), appliance_no, filename)
-    col_name = get_appliance_name(meter_id, appliance_no)
-    return col_name, read_column(new_filepath, col_name)
+        tbls = []
+        tbl = pv.read_csv(file, read_options=_READ_OPTS)
+        tbl = tbl.rename_columns(['timestamp', 'mains'])
+        tbls.append(tbl)
 
+        grouped = defaultdict(list)
+        for appliance in appliances:
+            appliance_name = appliance.stem.split('electric-appliance_')[-1]
+            tbl = pv.read_csv(appliance, read_options=_READ_OPTS)
+            tbl = tbl.rename_columns(['timestamp', appliance_name])
+            grouped[appliance_name].append(tbl)
 
-def load_day(raw_fp: str, meter_id: str) -> tuple[pa.Table, str]:
-    """One day-file for one household: mains + all appliance plugs, gap-free 1 Hz."""
-    day = os.path.splitext(os.path.basename(raw_fp))[0]      # '2012-06-01'
+        for name, group in grouped.items():
+            merged = pa.concat_tables(group) if len(group) > 1 else group[0]
+            tbls.append(merged)
 
-    start = np.datetime64(day, 's')
-    timestamps = start + np.arange(DAY_SECONDS, dtype='timedelta64[s]')
+        combined = tbls[0]
+        for t in tbls[1:]:
+            combined = combined.join(t, keys="timestamp")
 
-    columns = {
-        'timestamp': pa.array(timestamps),
-        'mains': pa.array(read_column(raw_fp, 'mains'), from_pandas=True),
-    }
-    for no in APPLIANCE_MAP[meter_id].values():
-        col_name, values = get_plug_data(raw_fp, no, meter_id)
-        columns[col_name] = pa.array(values, from_pandas=True)
+        # cast timestamp column, then split by day
+        combined = combined.set_column(
+            combined.column_names.index('timestamp'),
+            'timestamp',
+            pc.cast(combined.column('timestamp'), pa.timestamp('ms'))
+        )
+        day_col = pc.cast(combined.column('timestamp'), pa.date32())
+        combined = combined.append_column('day', day_col)
 
-    return pa.table(columns), day
+        unique_days = pc.unique(combined.column('day')).to_pylist()
+        for day in unique_days:
+            day_tbl = combined.filter(pc.equal(combined.column('day'), day))
+            day_tbl = day_tbl.drop_columns(['day'])
+            out_fp = PREPROCESS_MAINS_DIR / f"{home_id}_{day}.parquet"
+            pq.write_table(day_tbl, out_fp, compression='snappy')
+            print(f"table written to {out_fp}")
 
-def preprocess_user(meter_dir: str) -> float:
-    meter_id = os.path.basename(meter_dir)
-    day_fps = sorted(glob.glob(os.path.join(meter_dir, '*.csv')))
-    if not day_fps:
-        return 0.0
-
-    out_dir = PREPROCESS_DIR / 'mains' / meter_id
-    os.makedirs(out_dir, exist_ok=True)
-
-    meter_max = 0.0
-    nan_count = 0
-    for raw_fp in day_fps:
-        tbl, day = load_day(raw_fp, meter_id)
-        pq.write_table(tbl, out_dir / f'{day}.parquet', compression='snappy')
-
-        day_max = pc.max(tbl.column('mains')).as_py()
-        meter_max = max(meter_max, day_max or 0.0)
-
-        nan_count += pc.sum(pc.is_nan(tbl.column('mains'))).as_py()
-        print(f'{meter_id}/{day}: {nan_count:,} NaN mains readings')
-
-    print(f'{meter_id}: {len(day_fps):,} days -> {out_dir}')
-    return meter_max
 
 def preprocess_binary_vector(boundary_list: np.ndarray):
-    mains_dir = PREPROCESS_DIR / 'mains'
-    meter_dirs = sorted(d for d in mains_dir.iterdir() if d.is_dir())
-    days = sorted(fp.stem for fp in meter_dirs[0].glob('*.parquet'))
-    for meter_dir in meter_dirs:
-        for day in days:
-            fp = meter_dir / f'{day}.parquet'
-            if not fp.exists():
-                continue
-            tbl, meter_id, day = load_data(fp)
-            out_dir = PREPROCESS_DIR / 'appliances' / meter_id
-            os.makedirs(out_dir, exist_ok=True)
+    for file in PREPROCESS_MAINS_DIR.iterdir():
+        tbl = pq.read_table(file)
+        os.makedirs(PREPROCESS_APPS_DIR, exist_ok=True)
+        timestamps = tbl.column('timestamp')
+        dropped = tbl.drop_columns(['timestamp'])
+        values = pa.table({
+            name: pc.fill_null(dropped.column(name), 0)
+            for name in dropped.column_names
+        })
+        values, num_levels, num_rows = ldp_energy_discretise(values, boundary_list)
+        values = ldp_energy_encode_vectorise(values, num_levels, num_rows)
 
-            timestamps = tbl.column('timestamp')
+        out = pa.table({
+            'timestamp': timestamps,
+            **{name: values.column(name) for name in values.column_names}
+        })
+        pq.write_table(out, PREPROCESS_APPS_DIR / file.name, compression='snappy')
+        print(f'{file.name}: {out.num_columns - 1} bit columns -> {PREPROCESS_APPS_DIR}')
 
-            dropped = tbl.drop_columns(['timestamp'])
-            values = pa.table({
-                name: pc.fill_null(dropped.column(name), 0)
-                for name in dropped.column_names
-            })
-            values, num_levels, num_rows = ldp_energy_discretise(values, boundary_list)
-            values = ldp_energy_encode_vectorise(values, num_levels, num_rows)
-
-            out = pa.table({
-                'timestamp': timestamps,
-                **{name: values.column(name) for name in values.column_names}
-            })
-            pq.write_table(out, out_dir / f'{day}.parquet', compression='snappy')
-            print(f'{meter_id}/{day}: {out.num_columns - 1} bit columns -> {out_dir}')
 
 def main():
-    global_max = 0.0
-    for meter_dir in sorted(glob.glob(os.path.join(RAW_DIR, 'sm_*'))):
-        global_max = max(global_max, preprocess_user(meter_dir))
-    print('global mains max:', global_max)
-
     boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
+    #preprocess_data()
     preprocess_binary_vector(boundary_list)
+
 
 if __name__ == "__main__":
     main()

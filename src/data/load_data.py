@@ -1,8 +1,9 @@
 import os
-import numpy as np
+from pathlib import Path
+
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pathlib import Path
+
 
 def make_dirs(parts, filename):
     if isinstance(parts, (str, os.PathLike)):
@@ -13,9 +14,11 @@ def make_dirs(parts, filename):
     fp = os.path.join(dir, filename)
     return dir, fp
 
+
 # def load_data(directory: str|Path) -> tuple[pd.DataFrame, str, str]:
 #     for fp in sorted(Path(directory).glob('*.parquet')):
 #         yield pd.read_parquet(fp), fp.stem, fp.name
+
 
 def load_data(fp: Path) -> pa.Table:
     return pq.read_table(fp)

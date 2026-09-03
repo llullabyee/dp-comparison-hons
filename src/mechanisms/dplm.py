@@ -10,7 +10,7 @@ from scipy.stats import norm
 
 
 def dplm_mechanism(readings: np.ndarray, norm_prob: float, epsilon: float, sensitivity: float,
-                   peak: int, num_readings: int = 1, excess: float = 0) -> Tuple[np.ndarray, float]:
+                   peak: int, num_readings: int = 1, excess: float = 0) -> tuple[np.ndarray, float]:
     """
     Apply DPLM noise to every row of `df`, with peak clipping and
     excess carry-over into the next reading.

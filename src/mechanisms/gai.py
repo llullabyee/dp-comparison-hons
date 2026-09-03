@@ -60,56 +60,21 @@ def gai_mechanism(readings: np.ndarray, boundaries: np.ndarray, epsilon: float) 
     return boundaries[result_idx]
 
 
+def gai_aggregate(arr: np.ndarray, epsilon: float, num_boundaries: int, boundary_list: np.ndarray):
+    q_prob = 1 / (num_boundaries - 1 + np.exp(epsilon))
+    p_prob = np.exp(epsilon) * q_prob
+    boundary_arr = np.asarray(boundary_list)
+    n = arr.shape[0]
 
+    mask = arr != -1
+    n_reports = mask.sum(axis=1)
 
-def gai_aggregate(perturbed_vals: np.ndarray, boundaries: np.ndarray,
-    epsilon: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    n_rows, n_users = perturbed_vals.shape
-    n_levels = boundaries.size
-    exp_eps = np.exp(epsilon)
-    p_prob = exp_eps / (n_levels - 1 + exp_eps)
-    q_prob = 1 / (n_levels - 1 + exp_eps)
+    levels, inv = np.unique(arr[mask], return_inverse=True)
+    col_idx = np.searchsorted(boundary_arr, levels)
+    row_ids, _ = np.nonzero(mask)
 
-    idx = np.searchsorted(boundaries, perturbed_vals.ravel())
+    flat_idx = row_ids * num_boundaries + col_idx[inv]
+    counts = np.bincount(flat_idx, minlength=n * num_boundaries).reshape(n, num_boundaries)
 
-    counts = np.zeros((n_rows, n_levels), dtype=int)
-    row_idx = np.repeat(np.arange(n_rows), n_users)
-    np.add.at(counts, (row_idx, idx), 1)
-
-    n_per_row = counts.sum(axis=1, keepdims=True)
-    phi = (counts - n_per_row * q_prob) / (p_prob - q_prob)
-
-    return counts, phi, phi @ boundaries
-
-    # def gai_estimate(perturbed, boundary_list: list, epsilon: float) -> float:
-#     """
-#     Debiased aggregate estimate for GAI-perturbed data (Gai et al. 2022, Sec 5.4).
-
-#     k-RR outputs are categorical "votes", so summing the perturbed values
-#     directly is biased towards the domain midpoint. This inverts the noise to
-#     recover each grid value's true frequency and reports the estimated total.
-
-#         Phi(X_j) = [C(X_j) * (|X| - 1 + e^eps) - n] / (e^eps - 1)
-#         R        = sum_j  X_j * Phi(X_j)
-
-#     where C(X_j) is the observed count of grid value X_j and n is the number of
-#     perturbed records. `boundary_list` and `epsilon` must match those used to
-#     perturb the data.
-
-#     Returns the estimated total (R). Note Phi values are unbiased frequency
-#     estimates and may individually be negative or non-integer.
-#     """
-#     boundaries = np.asarray(boundary_list)
-#     values = np.asarray(perturbed)
-#     n = values.size
-#     k = boundaries.size
-#     exp_eps = np.exp(epsilon)
-
-#     # C(X_j): observed count of each grid value (values not on the grid -> 0).
-#     counts = np.zeros(k, dtype=np.int64)
-#     pos = np.searchsorted(boundaries, values)
-#     on_grid = (pos < k) & (boundaries[np.clip(pos, 0, k - 1)] == values)
-#     np.add.at(counts, pos[on_grid], 1)
-
-#     phi = (counts * (k - 1 + exp_eps) - n) / (exp_eps - 1)
-#     return float(np.sum(boundaries * phi))
+    aggregated_perturbed_values = (counts - n_reports[:, None] * q_prob) / (p_prob - q_prob)
+    return aggregated_perturbed_values

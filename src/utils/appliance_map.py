@@ -1,23 +1,24 @@
 from enum import Enum
 
+
 class ApplianceList(Enum):
-    KETTLE = 'kettle'
-    FRIDGE = 'fridge'
-    FRIDGE_FREEZER = 'fridgefreezer'
-    FREEZER = 'freezer'
-    WASHING_MACHINE = 'washingmachine'
-    WASHING_MACHINE_TUMBLE_DRIER = 'washingmachinetumbledrier'
-    TUMBLE_DRIER = 'tumbledrier'
-    DISHWASHER = 'dishwasher'
-    MICROWAVE = 'microwave'
-    TOASTER = 'toaster'
-    VACUUM_CLEANER = 'vacuumcleaner'
-    ELECTRIC_HEATER = 'electricheater'
-    ELECTRIC_OVEN = 'electricoven'
-    DEHUMIDIFIER = 'dehumidifier'
-    GRILL = 'grill'
-    OTHER = 'other'
-    APPLIANCE = 'appliance'
+    KETTLE = "kettle"
+    FRIDGE = "fridge"
+    FRIDGE_FREEZER = "fridgefreezer"
+    FREEZER = "freezer"
+    WASHING_MACHINE = "washingmachine"
+    WASHING_MACHINE_TUMBLE_DRIER = "washingmachinetumbledrier"
+    TUMBLE_DRIER = "tumbledrier"
+    DISHWASHER = "dishwasher"
+    MICROWAVE = "microwave"
+    TOASTER = "toaster"
+    VACUUM_CLEANER = "vacuumcleaner"
+    ELECTRIC_HEATER = "electricheater"
+    ELECTRIC_OVEN = "electricoven"
+    DEHUMIDIFIER = "dehumidifier"
+    GRILL = "grill"
+    OTHER = "other"
+    APPLIANCE = "appliance"
 
 
 # def get_appliance_no(meter_id: str, appliance: ApplianceList):

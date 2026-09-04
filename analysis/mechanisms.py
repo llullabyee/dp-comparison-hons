@@ -3,6 +3,8 @@ this code needs to be redone a bit to not do the meter dirs all at once.
 """
 
 # %% import statements
+import json
+import sys
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import reduce
@@ -21,37 +23,28 @@ from src.mechanisms.ldp_energy import (
 )
 from src.utils.appliance_map import ApplianceList
 from src.utils.config import (
-    DOMAIN_MAX,
-    EPSILON,
-    PEAK,
     PREPROCESS_APPS_DIR,
     PREPROCESS_MAINS_DIR,
     RESULT_DIR,
-    WINDOW_SIZE,
 )
 
-# %% directory creation
-mains_dir = (
-    RESULT_DIR
-    / f"eps={EPSILON:g}"
-    / f"w={WINDOW_SIZE}"
-    / f"peak={PEAK:g}"
-    / f"sens={DOMAIN_MAX:g}"
-    / "main"
-)
-apps_dir = (
-    RESULT_DIR
-    / f"eps={EPSILON:g}"
-    / f"w={WINDOW_SIZE}"
-    / f"peak={PEAK:g}"
-    / f"sens={DOMAIN_MAX:g}"
-    / "appliances"
-)
-mains_dir.mkdir(parents=True, exist_ok=True)
-apps_dir.mkdir(parents=True, exist_ok=True)
 
-# %% global variable initialisation
-boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
+def load_params():
+    if "--config" in sys.argv:
+        idx = sys.argv.index("--config")
+        with open(sys.argv[idx + 1]) as f:
+            return json.load(f)
+    raise ValueError("No config provided")
+
+
+# %% global variable and list initialisation
+params = load_params()
+peak = params["peak"]
+epsilon = params["epsilon"]
+window_size = params["window_size"]
+domain_max = params["domain_max"]
+
+boundary_list = build_boundary_list(epsilon, domain_max)
 appliance_list = list(ApplianceList)
 num_boundaries = len(boundary_list)
 mechanisms = ["LBU", "LSP", "LBD", "LBA"]
@@ -60,6 +53,26 @@ home_ids = sorted(
     {p.name.split("_")[0] for p in PREPROCESS_MAINS_DIR.glob("*_*.parquet")}
 )
 days = sorted({p.stem.split("_")[1] for p in PREPROCESS_MAINS_DIR.glob("*_*.parquet")})
+
+# %% directory creation
+mains_dir = (
+    RESULT_DIR
+    / f"eps={epsilon:g}"
+    / f"w={window_size}"
+    / f"peak={peak:g}"
+    / f"sens={domain_max:g}"
+    / "main"
+)
+apps_dir = (
+    RESULT_DIR
+    / f"eps={epsilon:g}"
+    / f"w={window_size}"
+    / f"peak={peak:g}"
+    / f"sens={domain_max:g}"
+    / "appliances"
+)
+mains_dir.mkdir(parents=True, exist_ok=True)
+apps_dir.mkdir(parents=True, exist_ok=True)
 
 
 # %% function definition — one home's worth of work, run inside a worker process
@@ -71,7 +84,7 @@ def process_home(home_id):
         m: dict(
             last_published_idx=0,
             last_published_epsilon=0,
-            budget_spent=deque(maxlen=WINDOW_SIZE - 1),
+            budget_spent=deque(maxlen=window_size - 1),
             last_published_release=None,
             global_idx=0,
             excess=0,
@@ -90,10 +103,10 @@ def process_home(home_id):
         )
 
         # %% gai perturbation
-        gai_values = gai_mechanism(mains_readings, boundary_list, EPSILON)
+        gai_values = gai_mechanism(mains_readings, boundary_list, epsilon)
         # %% dplm perturbation
         dplm_values, dplm_excess = dplm_mechanism(
-            mains_readings, 0.98, EPSILON, DOMAIN_MAX, PEAK, excess=dplm_excess
+            mains_readings, 0.98, epsilon, domain_max, peak, excess=dplm_excess
         )
         # %% table writing
         perturbed_tbl = pa.table(
@@ -123,8 +136,8 @@ def process_home(home_id):
             ) = ldp_energy_mechanism(
                 mechanism,
                 app_tbl,
-                EPSILON,
-                WINDOW_SIZE,
+                epsilon,
+                window_size,
                 state["last_published_idx"],
                 state["last_published_epsilon"],
                 state["budget_spent"],
@@ -175,7 +188,7 @@ if __name__ == "__main__":
         )
         # %% gai aggregation
         aggregated_perturbed_values = gai_aggregate(
-            arr, EPSILON, num_boundaries, boundary_list
+            arr, epsilon, num_boundaries, boundary_list
         )
         gai_freq_tbl = pa.table(
             {
@@ -223,7 +236,7 @@ if __name__ == "__main__":
             mech_arrs = np.hstack(mech_arrs)
             mech_arrs = mech_arrs.reshape(mech_arrs.shape[0], len(col_groups), -1)
 
-            aggregated_perturbed_values = ldp_aggregate(mech_arrs, EPSILON)
+            aggregated_perturbed_values = ldp_aggregate(mech_arrs, epsilon)
             appliance_names = [c.rsplit("_", 1)[0] for c in col_groups[0]]
 
             ldp_agg_tbl = pa.table(

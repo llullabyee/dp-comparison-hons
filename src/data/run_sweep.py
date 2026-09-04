@@ -1,6 +1,7 @@
 import itertools
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -36,7 +37,7 @@ for combo in combos:
     log_path = logs_dir / f"{tag}.log"
     with open(log_path, "w") as log_file:
         result = subprocess.run(
-            ["python", "-m", "analysis.mechanisms", "--config", str(config_path)],
+            [sys.executable, "-m", "analysis.mechanisms", "--config", str(config_path)],
             stdout=log_file,
             stderr=subprocess.STDOUT,
         )

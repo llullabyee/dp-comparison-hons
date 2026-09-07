@@ -3,8 +3,6 @@ this code needs to be redone a bit to not do the meter dirs all at once.
 """
 
 # %% import statements
-import json
-import sys
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import reduce
@@ -23,19 +21,10 @@ from src.mechanisms.ldp_energy import (
 )
 from src.utils.appliance_map import ApplianceList
 from src.utils.config import (
-    PREPROCESS_APPS_DIR,
-    PREPROCESS_MAINS_DIR,
+    PREPROCESS_DIR,
     RESULT_DIR,
+    load_params,
 )
-
-
-def load_params():
-    if "--config" in sys.argv:
-        idx = sys.argv.index("--config")
-        with open(sys.argv[idx + 1]) as f:
-            return json.load(f)
-    raise ValueError("No config provided")
-
 
 # %% global variable and list initialisation
 params = load_params()
@@ -49,10 +38,13 @@ appliance_list = list(ApplianceList)
 num_boundaries = len(boundary_list)
 mechanisms = ["LBU", "LSP", "LBD", "LBA"]
 
-home_ids = sorted(
-    {p.name.split("_")[0] for p in PREPROCESS_MAINS_DIR.glob("*_*.parquet")}
+preprocess_mains = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "main"
+preprocess_apps = (
+    PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "appliances"
 )
-days = sorted({p.stem.split("_")[1] for p in PREPROCESS_MAINS_DIR.glob("*_*.parquet")})
+
+home_ids = sorted({p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")})
+days = sorted({p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")})
 
 # %% directory creation
 mains_dir = (
@@ -91,10 +83,10 @@ def process_home(home_id):
         )
         for m in mechanisms
     }
-    fps = sorted(PREPROCESS_MAINS_DIR.glob(f"{home_id}_*.parquet"))
+    fps = sorted(preprocess_mains.glob(f"{home_id}_*.parquet"))
 
     for fp in fps:
-        app_fp = PREPROCESS_APPS_DIR / fp.name
+        app_fp = preprocess_apps / fp.name
         print(f"[{home_id}] Processing {app_fp}")
         tbl = pq.read_table(fp)
         app_tbl = pq.read_table(app_fp)

@@ -1,48 +1,67 @@
-'''
+"""
 Preprocesses the ECO dataset. Reads sm_* / plug_* files from data/eco/raw/ and
 writes one parquet per household per day to data/eco/preprocess/mains/sm_*/,
 containing mains power, per-appliance power, and timestamp/day columns.
-'''
-import os
-import glob
+"""
+
+from collections import defaultdict
+from datetime import datetime
+
 import numpy as np
 import pyarrow as pa
-import pyarrow.csv as pv
 import pyarrow.compute as pc
+import pyarrow.csv as pv
 import pyarrow.parquet as pq
-from collections import defaultdict
 
-from src.utils.config import APPLIANCES_DIR, MAINS_DIR, PREPROCESS_APPS_DIR, PREPROCESS_MAINS_DIR, EPSILON, DOMAIN_MAX
-from src.mechanisms.ldp_energy import ldp_energy_discretise, ldp_energy_encode_vectorise
 from src.mechanisms.gai import build_boundary_list
-from src.data.load_data import load_data
+from src.mechanisms.ldp_energy import ldp_energy_discretise, ldp_energy_encode_vectorise
+from src.utils.config import (
+    APPLIANCES_DIR,
+    MAINS_DIR,
+    PREPROCESS_DIR,
+    load_params,
+)
 
+START_TIMESTAMP = datetime(2018, 4, 1)
+END_TIMESTAMP = datetime(2018, 5, 1)
 DAY_SECONDS = 86_400
 
 _READ_OPTS = pv.ReadOptions(autogenerate_column_names=True)
-_CONV_OPTS = pv.ConvertOptions(include_columns=['f0'],
-                               column_types={'f0': pa.float32()})
+_CONV_OPTS = pv.ConvertOptions(
+    include_columns=["f0"], column_types={"f0": pa.float32()}
+)
 
-def preprocess_data():
-    PREPROCESS_MAINS_DIR.mkdir(parents=True, exist_ok=True)
-    PREPROCESS_APPS_DIR.mkdir(parents=True, exist_ok=True)
+params = load_params()
+epsilon = params["epsilon"]
+domain_max = params["domain_max"]
+
+# %% directory creation
+mains_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "main"
+apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "appliances"
+mains_dir.mkdir(parents=True, exist_ok=True)
+apps_dir.mkdir(parents=True, exist_ok=True)
+
+
+def preprocess_data(start_ts, end_ts):
+    mains_dir.mkdir(parents=True, exist_ok=True)
+    apps_dir.mkdir(parents=True, exist_ok=True)
 
     for file in MAINS_DIR.iterdir():
-        home_id = file.stem.split('_')[0]
+        home_id = file.stem.split("_")[0]
         appliances = list(APPLIANCES_DIR.glob(f"{home_id}_*.csv"))
         if not appliances:
             continue
 
         tbls = []
         tbl = pv.read_csv(file, read_options=_READ_OPTS)
-        tbl = tbl.rename_columns(['timestamp', 'mains'])
+        tbl = tbl.rename_columns(["timestamp", "mains"])
         tbls.append(tbl)
 
         grouped = defaultdict(list)
         for appliance in appliances:
-            appliance_name = appliance.stem.split('electric-appliance_')[-1]
+            appliance_name = appliance.stem.split("electric-appliance_")[-1]
             tbl = pv.read_csv(appliance, read_options=_READ_OPTS)
-            tbl = tbl.rename_columns(['timestamp', appliance_name])
+            tbl = tbl.rename_columns(["timestamp", appliance_name])
             grouped[appliance_name].append(tbl)
 
         for name, group in grouped.items():
@@ -55,46 +74,67 @@ def preprocess_data():
 
         # cast timestamp column, then split by day
         combined = combined.set_column(
-            combined.column_names.index('timestamp'),
-            'timestamp',
-            pc.cast(combined.column('timestamp'), pa.timestamp('ms'))
+            combined.column_names.index("timestamp"),
+            "timestamp",
+            pc.cast(combined.column("timestamp"), pa.timestamp("ms")),
         )
-        day_col = pc.cast(combined.column('timestamp'), pa.date32())
-        combined = combined.append_column('day', day_col)
 
-        unique_days = pc.unique(combined.column('day')).to_pylist()
+        if start_ts is not None or end_ts is not None:
+            mask = None
+            if start_ts is not None:
+                mask = pc.greater_equal(
+                    combined.column("timestamp"),
+                    pa.scalar(start_ts, type=pa.timestamp("ms")),
+                )
+            if end_ts is not None:
+                end_mask = pc.less(
+                    combined.column("timestamp"),
+                    pa.scalar(end_ts, type=pa.timestamp("ms")),
+                )
+                mask = end_mask if mask is None else pc.and_(mask, end_mask)
+            combined = combined.filter(mask)
+            if combined.num_rows == 0:
+                continue
+
+        day_col = pc.cast(combined.column("timestamp"), pa.date32())
+        combined = combined.append_column("day", day_col)
+
+        unique_days = pc.unique(combined.column("day")).to_pylist()
         for day in unique_days:
-            day_tbl = combined.filter(pc.equal(combined.column('day'), day))
-            day_tbl = day_tbl.drop_columns(['day'])
-            out_fp = PREPROCESS_MAINS_DIR / f"{home_id}_{day}.parquet"
-            pq.write_table(day_tbl, out_fp, compression='snappy')
+            day_tbl = combined.filter(pc.equal(combined.column("day"), day))
+            day_tbl = day_tbl.drop_columns(["day"])
+            out_fp = mains_dir / f"{home_id}_{day}.parquet"
+            pq.write_table(day_tbl, out_fp, compression="snappy")
             print(f"table written to {out_fp}")
 
 
 def preprocess_binary_vector(boundary_list: np.ndarray):
-    for file in PREPROCESS_MAINS_DIR.iterdir():
+    for file in mains_dir.iterdir():
         tbl = pq.read_table(file)
-        os.makedirs(PREPROCESS_APPS_DIR, exist_ok=True)
-        timestamps = tbl.column('timestamp')
-        dropped = tbl.drop_columns(['timestamp'])
-        values = pa.table({
-            name: pc.fill_null(dropped.column(name), 0)
-            for name in dropped.column_names
-        })
+        timestamps = tbl.column("timestamp")
+        dropped = tbl.drop_columns(["timestamp"])
+        values = pa.table(
+            {
+                name: pc.fill_null(dropped.column(name), 0)
+                for name in dropped.column_names
+            }
+        )
         values, num_levels, num_rows = ldp_energy_discretise(values, boundary_list)
         values = ldp_energy_encode_vectorise(values, num_levels, num_rows)
 
-        out = pa.table({
-            'timestamp': timestamps,
-            **{name: values.column(name) for name in values.column_names}
-        })
-        pq.write_table(out, PREPROCESS_APPS_DIR / file.name, compression='snappy')
-        print(f'{file.name}: {out.num_columns - 1} bit columns -> {PREPROCESS_APPS_DIR}')
+        out = pa.table(
+            {
+                "timestamp": timestamps,
+                **{name: values.column(name) for name in values.column_names},
+            }
+        )
+        pq.write_table(out, apps_dir / file.name, compression="snappy")
+        print(f"{file.name}: {out.num_columns - 1} bit columns -> {apps_dir}")
 
 
 def main():
-    boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
-    #preprocess_data()
+    boundary_list = build_boundary_list(epsilon, domain_max)
+    preprocess_data(start_ts=START_TIMESTAMP, end_ts=END_TIMESTAMP)
     preprocess_binary_vector(boundary_list)
 
 

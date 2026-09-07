@@ -13,7 +13,7 @@ def return_bounds_snap(column, intervals, interval_size):
     'first level' assumption noted below.
     """
     column = np.asarray(column, dtype=float)
-
+    idx = np.searchsorted(intervals, column)
     idx = np.clip(
         idx, 1, interval_size - 1
     )  # ensure idx-1 is valid, and idx never falls on the last point alone

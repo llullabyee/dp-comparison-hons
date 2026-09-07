@@ -131,9 +131,12 @@ def preprocess_binary_vector(boundary_list: np.ndarray):
 
 
 def main():
-    if mains_dir.exists() and any(mains_dir.iterdir()) \
-    and apps_dir.exists() and any(apps_dir.iterdir()):
+    mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
+    apps_ready = apps_dir.exists() and any(apps_dir.iterdir())
+
+    if mains_ready and apps_ready:
         return
+
     mains_dir.mkdir(parents=True, exist_ok=True)
     apps_dir.mkdir(parents=True, exist_ok=True)
     boundary_list = build_boundary_list(epsilon, domain_max)

@@ -339,9 +339,10 @@ def ldp_energy_mechanism(
 
 def ldp_aggregate(tables: np.ndarray, epsilon: float):
     q_prob = ldp_probability(epsilon)
-    mask = tables != -1
-    n_reports = mask.sum(axis=1)  # (t, m) — users reporting, per appliance
-    sums = np.where(mask, tables, 0).sum(axis=1)  # (t, m)
+    # Avoid creating temporary full-size arrays with np.where
+    valid = tables != -1
+    # Calculate sums directly using in-place multiplication to avoid zero-filling allocations
+    n_reports = valid.sum(axis=1)  # (time, appliances)
+    sums = (tables * valid).sum(axis=1)  # (time, appliances)
     aggregated_perturbed_values = (sums - n_reports * q_prob) / (0.5 - q_prob)
-    return aggregated_perturbed_values  # (t, m)
-    return aggregated_perturbed_values  # (t, m)
+    return aggregated_perturbed_values

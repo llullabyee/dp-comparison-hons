@@ -16,14 +16,21 @@ def build_boundary_list(epsilon: float, max_value: int) -> np.ndarray:
 
 def return_bounds(column, boundaries, interval_size):
     idx = np.searchsorted(boundaries, column, side="left")
-    exact = (idx < interval_size) & (boundaries[np.clip(idx, 0, interval_size - 1)] == column)
-    lower = np.where(exact, boundaries[np.clip(idx, 0, interval_size - 1)],
-                     boundaries[np.clip(idx - 1, 0, interval_size - 1)])
+    exact = (idx < interval_size) & (
+        boundaries[np.clip(idx, 0, interval_size - 1)] == column
+    )
+    lower = np.where(
+        exact,
+        boundaries[np.clip(idx, 0, interval_size - 1)],
+        boundaries[np.clip(idx - 1, 0, interval_size - 1)],
+    )
     upper = np.where(exact, lower, boundaries[np.clip(idx, 0, interval_size - 1)])
     return lower, upper
 
 
-def gai_mechanism(readings: np.ndarray, boundaries: np.ndarray, epsilon: float) -> np.ndarray:
+def gai_mechanism(
+    readings: np.ndarray, boundaries: np.ndarray, epsilon: float
+) -> np.ndarray:
     """
     Vectorised GAI mechanism.
 
@@ -60,21 +67,27 @@ def gai_mechanism(readings: np.ndarray, boundaries: np.ndarray, epsilon: float) 
     return boundaries[result_idx]
 
 
-def gai_aggregate(arr: np.ndarray, epsilon: float, num_boundaries: int, boundary_list: np.ndarray):
+def gai_aggregate(
+    arr: np.ndarray, epsilon: float, num_boundaries: int, boundary_list: np.ndarray
+):
     q_prob = 1 / (num_boundaries - 1 + np.exp(epsilon))
     p_prob = np.exp(epsilon) * q_prob
     boundary_arr = np.asarray(boundary_list)
-    n = arr.shape[0]
-
-    mask = arr != -1
-    n_reports = mask.sum(axis=1)
-
-    levels, inv = np.unique(arr[mask], return_inverse=True)
-    col_idx = np.searchsorted(boundary_arr, levels)
-    row_ids, _ = np.nonzero(mask)
-
-    flat_idx = row_ids * num_boundaries + col_idx[inv]
-    counts = np.bincount(flat_idx, minlength=n * num_boundaries).reshape(n, num_boundaries)
-
-    aggregated_perturbed_values = (counts - n_reports[:, None] * q_prob) / (p_prob - q_prob)
+    n, n_homes = arr.shape
+    # 1. Direct count of valid reports per timestamp without boolean masking
+    valid = arr != -1
+    n_reports = valid.sum(axis=1)
+    # 2. Map array values directly to boundary indices using searchsorted
+    # Set -1 entries to a dummy value (e.g., 0) so searchsorted won't crash
+    clean_arr = np.where(valid, arr, boundary_arr[0])
+    idx = np.searchsorted(boundary_arr, clean_arr)
+    # 3. Fast 2D histogram computation using matrix row-indexing
+    counts = np.zeros((n, num_boundaries), dtype=np.int32)
+    row_indices = np.arange(n)[:, None]
+    # Use np.add.at to accumulate counts in-place without giant 1D flattened vectors
+    np.add.at(counts, (row_indices, idx), valid)
+    # 4. Debias
+    aggregated_perturbed_values = (counts - n_reports[:, None] * q_prob) / (
+        p_prob - q_prob
+    )
     return aggregated_perturbed_values

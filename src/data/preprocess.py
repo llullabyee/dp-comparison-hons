@@ -38,7 +38,7 @@ domain_max = params["domain_max"]
 
 # %% directory creation
 mains_dir = PREPROCESS_MAINS_DIR
-apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "appliances"
+apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
 
 
 def preprocess_data(start_ts, end_ts):

@@ -22,6 +22,7 @@ from src.mechanisms.ldp_energy import (
 from src.utils.appliance_map import ApplianceList
 from src.utils.config import (
     PREPROCESS_DIR,
+    PREPROCESS_MAINS_DIR,
     RESULT_DIR,
     load_params,
 )
@@ -38,10 +39,8 @@ appliance_list = list(ApplianceList)
 num_boundaries = len(boundary_list)
 mechanisms = ["LBU", "LSP", "LBD", "LBA"]
 
-preprocess_mains = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "main"
-preprocess_apps = (
-    PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "appliances"
-)
+preprocess_mains = PREPROCESS_MAINS_DIR
+preprocess_apps = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
 
 home_ids = sorted({p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")})
 days = sorted({p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")})

@@ -189,7 +189,7 @@ def main():
                 },
             }
         )
-        gai_freq_fp = mains_dir / "gai" / f"{day}_gai.parquet"
+        gai_freq_fp = run_dir / "gai_agg" / f"{day}_gai.parquet"
         Path(gai_freq_fp).parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(gai_freq_tbl, gai_freq_fp)
         print(f"Gai Debiasing — homes reported {day}: {agg_home_ids}")
@@ -241,7 +241,9 @@ def main():
                     },
                 }
             )
-            mechanism_freq_fp = apps_dir / "LDP-Energy" / f"{day}_{mechanism}.parquet"
+            mechanism_freq_fp = (
+                run_dir / "ldp_energy_agg" / f"{day}_{mechanism}.parquet"
+            )
             Path(mechanism_freq_fp).parent.mkdir(parents=True, exist_ok=True)
             pq.write_table(ldp_agg_tbl, mechanism_freq_fp)
             print(f"Appliance Debiasing — homes reported {day}: {agg_home_ids}")

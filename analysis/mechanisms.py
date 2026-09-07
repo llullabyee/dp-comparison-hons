@@ -46,22 +46,16 @@ home_ids = sorted({p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parq
 days = sorted({p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")})
 
 # %% directory creation
-mains_dir = (
+run_dir = (
     RESULT_DIR
     / f"eps={epsilon:g}"
     / f"w={window_size}"
     / f"peak={peak:g}"
     / f"sens={domain_max:g}"
-    / "main"
 )
-apps_dir = (
-    RESULT_DIR
-    / f"eps={epsilon:g}"
-    / f"w={window_size}"
-    / f"peak={peak:g}"
-    / f"sens={domain_max:g}"
-    / "appliances"
-)
+
+mains_dir = run_dir / "main"
+apps_dir = run_dir / "appliances"
 mains_dir.mkdir(parents=True, exist_ok=True)
 apps_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,7 +187,7 @@ def process_day(
                 },
             }
         )
-        gai_freq_fp = mains_dir / "gai" / f"{day}_gai.parquet"
+        gai_freq_fp = run_dir / "gai_aggregation" / f"{day}.parquet"
         Path(gai_freq_fp).parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(gai_freq_tbl, gai_freq_fp)
         print(f"Gai Debiasing — homes reported {day}: {agg_home_ids}")
@@ -249,7 +243,7 @@ def process_day(
                 },
             }
         )
-        mechanism_freq_fp = apps_dir / "LDP-Energy" / f"{day}_{mechanism}.parquet"
+        mechanism_freq_fp = run_dir / "ldp_energy_agg" / f"{day}_{mechanism}.parquet"
         Path(mechanism_freq_fp).parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(ldp_agg_tbl, mechanism_freq_fp)
         print(f"Appliance Debiasing — homes reported {day}: {agg_home_ids}")

@@ -221,7 +221,10 @@ def main():
             timestamps = joined.column("timestamp")
             joined = joined.drop_columns("timestamp")
             joined = pa.table(
-                {c: pc.fill_null(joined.column(c), -1) for c in joined.column_names}
+                {
+                    c: pc.fill_null(pc.cast(joined.column(c), pa.int16()), -1)
+                    for c in joined.column_names
+                }
             )
 
             mech_arrs = [

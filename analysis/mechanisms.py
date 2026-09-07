@@ -143,12 +143,15 @@ def process_home(home_id):
 
 
 # %% outer loop for perturbation — one process per home
-if __name__ == "__main__":
-    with ProcessPoolExecutor(max_workers=16) as ex:  # tune to core count
-        futures = {ex.submit(process_home, h): h for h in home_ids}
-        for fut in as_completed(futures):
-            completed_home = fut.result()  # raises here if that home's work errored
-            print(f"Finished home {completed_home}")
+def main():
+    mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
+    apps_ready = apps_dir.exists() and any(apps_dir.iterdir())
+    if not mains_ready or not apps_ready:
+        with ProcessPoolExecutor(max_workers=16) as ex:  # tune to core count
+            futures = {ex.submit(process_home, h): h for h in home_ids}
+            for fut in as_completed(futures):
+                completed_home = fut.result()  # raises here if that home's work errored
+                print(f"Finished home {completed_home}")
 
     # %% outer loop for aggregation — must stay under the __main__ guard too,
     # otherwise on spawn-based multiprocessing (macOS/Windows) every worker
@@ -243,3 +246,7 @@ if __name__ == "__main__":
             Path(mechanism_freq_fp).parent.mkdir(parents=True, exist_ok=True)
             pq.write_table(ldp_agg_tbl, mechanism_freq_fp)
             print(f"Appliance Debiasing — homes reported {day}: {agg_home_ids}")
+
+
+if __name__ == "__main__":
+    main()

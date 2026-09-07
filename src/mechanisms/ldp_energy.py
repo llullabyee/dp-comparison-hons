@@ -91,7 +91,7 @@ def ldp_energy_encode_vectorise(
         levels = tbl.column(
             column
         ).to_numpy()  # 0 = missing/not-present, 1..num_levels = valid level
-        one_hot = np.zeros((num_rows, num_levels), dtype="uint8")
+        one_hot = np.zeros((num_rows, num_levels), dtype=np.int16)
 
         valid = levels > 0
         row_idx = np.arange(num_rows)[valid]
@@ -135,7 +135,7 @@ def ldp_energy_randomise(
 
     sampled_mask = (epsilon_col != None).ravel()  # noqa: E711
 
-    output = np.empty(bv.shape, dtype="uint8")
+    output = np.empty(bv.shape, dtype=np.int16)
 
     sampled_epsilon = epsilon_col[sampled_mask].astype(
         float
@@ -148,7 +148,7 @@ def ldp_energy_randomise(
         sampled_bits == 1,
         rand < 0.5,
         rand < q_prob,
-    ).astype("uint8")
+    ).astype(np.int16)
 
     last_idx = np.where(sampled_mask, np.arange(n), 0)
     np.maximum.accumulate(last_idx, out=last_idx)
@@ -184,7 +184,7 @@ def ldp_budget_distribution(
     releases = []
     budget_spent_arr = []
     if last_published_release is None:
-        last_published_release = np.zeros(binary_vector.shape[1], dtype="uint8")
+        last_published_release = np.zeros(binary_vector.shape[1], dtype=np.int16)
     eps_t1 = epsilon / (2 * window_size)
 
     perturbed_t1_all = ldp_energy_randomise(
@@ -222,7 +222,7 @@ def ldp_budget_absorption(
     last_published_release: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, float, np.ndarray, int]:
     if last_published_release is None:
-        last_published_release = np.zeros(binary_vector.shape[1], dtype="uint8")
+        last_published_release = np.zeros(binary_vector.shape[1], dtype=np.int16)
     releases = []
     budget_spent_arr = []
     eps_t1 = epsilon / (2 * window_size)

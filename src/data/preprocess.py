@@ -19,6 +19,7 @@ from src.utils.config import (
     APPLIANCES_DIR,
     MAINS_DIR,
     PREPROCESS_DIR,
+    PREPROCESS_MAINS_DIR,
     load_params,
 )
 
@@ -36,14 +37,11 @@ epsilon = params["epsilon"]
 domain_max = params["domain_max"]
 
 # %% directory creation
-mains_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "main"
+mains_dir = PREPROCESS_MAINS_DIR
 apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "appliances"
 
 
 def preprocess_data(start_ts, end_ts):
-    mains_dir.mkdir(parents=True, exist_ok=True)
-    apps_dir.mkdir(parents=True, exist_ok=True)
-
     for file in MAINS_DIR.iterdir():
         home_id = file.stem.split("_")[0]
         appliances = list(APPLIANCES_DIR.glob(f"{home_id}_*.csv"))
@@ -133,14 +131,16 @@ def preprocess_binary_vector(boundary_list: np.ndarray):
 def main():
     mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
     apps_ready = apps_dir.exists() and any(apps_dir.iterdir())
-
-    if mains_ready and apps_ready:
+    if apps_ready:
         return
 
     mains_dir.mkdir(parents=True, exist_ok=True)
     apps_dir.mkdir(parents=True, exist_ok=True)
+
+    if not mains_ready:
+        preprocess_data(start_ts=START_TIMESTAMP, end_ts=END_TIMESTAMP)
+
     boundary_list = build_boundary_list(epsilon, domain_max)
-    preprocess_data(start_ts=START_TIMESTAMP, end_ts=END_TIMESTAMP)
     preprocess_binary_vector(boundary_list)
 
 

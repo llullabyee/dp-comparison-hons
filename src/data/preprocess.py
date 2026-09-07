@@ -38,8 +38,6 @@ domain_max = params["domain_max"]
 # %% directory creation
 mains_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "main"
 apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}" / "appliances"
-mains_dir.mkdir(parents=True, exist_ok=True)
-apps_dir.mkdir(parents=True, exist_ok=True)
 
 
 def preprocess_data(start_ts, end_ts):
@@ -133,6 +131,11 @@ def preprocess_binary_vector(boundary_list: np.ndarray):
 
 
 def main():
+    if mains_dir.exists() and any(mains_dir.iterdir()) \
+    and apps_dir.exists() and any(apps_dir.iterdir()):
+        return
+    mains_dir.mkdir(parents=True, exist_ok=True)
+    apps_dir.mkdir(parents=True, exist_ok=True)
     boundary_list = build_boundary_list(epsilon, domain_max)
     preprocess_data(start_ts=START_TIMESTAMP, end_ts=END_TIMESTAMP)
     preprocess_binary_vector(boundary_list)

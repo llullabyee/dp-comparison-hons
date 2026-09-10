@@ -55,8 +55,12 @@ run_dir = (
 )
 mains_dir = run_dir / "main"
 apps_dir = run_dir / "appliances"
+gai_dir = run_dir / "gai_agg"
+ldp_energy_dir = run_dir / "ldp_energy_agg"
 mains_dir.mkdir(parents=True, exist_ok=True)
 apps_dir.mkdir(parents=True, exist_ok=True)
+gai_dir.mkdir(parents=True, exist_ok=True)
+ldp_energy_dir.mkdir(parents=True, exist_ok=True)
 
 
 # %% function definition — one home's worth of work, run inside a worker process
@@ -176,7 +180,7 @@ def process_day(day):
         }
     )
     del aggregated_perturbed_values
-    gai_freq_fp = run_dir / "gai_agg" / f"{day}_gai.parquet"
+    gai_freq_fp = gai_dir / f"{day}_gai.parquet"
     Path(gai_freq_fp).parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(gai_freq_tbl, gai_freq_fp)
     del gai_freq_tbl
@@ -233,7 +237,7 @@ def process_day(day):
             }
         )
         del aggregated_perturbed_values
-        mechanism_freq_fp = run_dir / "ldp_energy_agg" / f"{day}_{mechanism}.parquet"
+        mechanism_freq_fp = ldp_energy_dir / f"{day}_{mechanism}.parquet"
         Path(mechanism_freq_fp).parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(ldp_agg_tbl, mechanism_freq_fp)
         del ldp_agg_tbl
@@ -246,7 +250,9 @@ def process_day(day):
 def main():
     mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
     apps_ready = apps_dir.exists() and any(apps_dir.iterdir())
-    if mains_ready and apps_ready:
+    gai_ready = gai_dir.exists() and any(gai_dir.iterdir())
+    ldp_ready = ldp_energy_dir.exists() and any(ldp_energy_dir.iterdir())
+    if mains_ready and apps_ready and ldp_ready and gai_ready:
         return
     if not mains_ready or not apps_ready:
         with ProcessPoolExecutor(max_workers=12) as ex:  # tune to core count
@@ -254,11 +260,12 @@ def main():
             for fut in as_completed(futures):
                 completed_home = fut.result()  # raises here if that home's work errored
                 print(f"Finished home {completed_home}")
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(process_day, day): day for day in days}
-        for future in as_completed(futures):
-            day = futures[future]
-            future.result()
+    if not gai_ready or not ldp_ready:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(process_day, day): day for day in days}
+            for future in as_completed(futures):
+                day = futures[future]
+                future.result()
 
 
 if __name__ == "__main__":

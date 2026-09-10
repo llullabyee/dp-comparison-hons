@@ -4,6 +4,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
 import yaml
@@ -23,6 +24,19 @@ def heartbeat_loop():
         except requests.RequestException:
             pass
         stop_event.wait(PING_INTERVAL)
+
+
+def send_failure_ping(msg: str):
+    parsed = urlparse(HEARTBEAT_URL)
+    query = parse_qs(parsed.query)
+    query["status"] = ["down"]
+    query["msg"] = [msg[:500]]  # keep it reasonably short
+    new_query = urlencode(query, doseq=True)
+    down_url = urlunparse(parsed._replace(query=new_query))
+    try:
+        requests.get(down_url, timeout=5)
+    except requests.RequestException:
+        pass
 
 
 with open(SWEEP_CONFIG_PATH) as f:
@@ -63,9 +77,9 @@ try:
                 stderr=subprocess.STDOUT,
             )
             if result.returncode != 0:
-                print(
-                    f"  FAILED preprocess (exit {result.returncode}) — see {log_path}"
-                )
+                msg = f"[{tag}] FAILED preprocess (exit {result.returncode})"
+                print(f"  {msg} — see {log_path}")
+                send_failure_ping(msg)
                 continue  # skip mechanisms run if preprocessing failed
 
         log_path = logs_dir / f"{tag}.log"
@@ -82,6 +96,8 @@ try:
                 stderr=subprocess.STDOUT,
             )
             if result.returncode != 0:
-                print(f"  FAILED (exit {result.returncode}) — see {log_path}")
+                msg = f"[{tag}] FAILED mechanisms (exit {result.returncode})"
+                print(f"  {msg} — see {log_path}")
+                send_failure_ping(msg)
 finally:
     stop_event.set()

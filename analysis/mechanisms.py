@@ -142,7 +142,7 @@ def main():
     if mains_ready and apps_ready:
         return
     if not mains_ready or not apps_ready:
-        with ProcessPoolExecutor(max_workers=16) as ex:  # tune to core count
+        with ProcessPoolExecutor(max_workers=12) as ex:  # tune to core count
             futures = {ex.submit(process_home, h): h for h in home_ids}
             for fut in as_completed(futures):
                 completed_home = fut.result()  # raises here if that home's work errored

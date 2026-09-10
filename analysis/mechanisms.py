@@ -168,7 +168,7 @@ def main():
         joined = joined.drop_columns("timestamp")
         joined = pa.table(
             {
-                c: pc.fill_null(pc.cast(joined.column(c), pa.int16()), -1)
+                c: pc.fill_null(pc.cast(joined.column(c), pa.int8()), -1)
                 for c in joined.column_names
             }  ## safety check
         )
@@ -213,11 +213,12 @@ def main():
                 lambda l, r: l.join(r, keys="timestamp", join_type="full outer"),
                 mech_tables,
             ).sort_by("timestamp")
+            del raw_tables, mech_tables
             timestamps = joined.column("timestamp")
             joined = joined.drop_columns("timestamp")
             joined = pa.table(
                 {
-                    c: pc.fill_null(pc.cast(joined.column(c), pa.int16()), -1)
+                    c: pc.fill_null(pc.cast(joined.column(c), pa.int8()), -1)
                     for c in joined.column_names
                 }
             )
@@ -228,10 +229,12 @@ def main():
                 )
                 for group in col_groups
             ]
+            del joined
             mech_arrs = np.hstack(mech_arrs)
             mech_arrs = mech_arrs.reshape(mech_arrs.shape[0], len(col_groups), -1)
 
             aggregated_perturbed_values = ldp_aggregate(mech_arrs, epsilon)
+            del mech_arrs
             appliance_names = [c.rsplit("_", 1)[0] for c in col_groups[0]]
 
             ldp_agg_tbl = pa.table(

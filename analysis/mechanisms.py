@@ -156,7 +156,7 @@ def process_day(day):
     joined = joined.drop_columns("timestamp")
     joined = pa.table(
         {
-            c: pc.fill_null(pc.cast(joined.column(c), pa.int8()), -1)
+            c: pc.fill_null(pc.cast(joined.column(c), pa.int16()), -1)
             for c in joined.column_names
         }
     )

@@ -139,6 +139,8 @@ def process_home(home_id):
 def main():
     mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
     apps_ready = apps_dir.exists() and any(apps_dir.iterdir())
+    if mains_ready and apps_ready:
+        return
     if not mains_ready or not apps_ready:
         with ProcessPoolExecutor(max_workers=16) as ex:  # tune to core count
             futures = {ex.submit(process_home, h): h for h in home_ids}

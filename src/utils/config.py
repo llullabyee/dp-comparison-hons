@@ -14,6 +14,8 @@ def load_params():
 DATA_DIR = Path(r"Y:\IDEAL")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "config"
+SWEEP_CONFIG_PATH = CONFIG_DIR / "sweep.yaml"
+
 MAINS_DIR = DATA_DIR / "household_sensors" / "electric_mains"
 APPLIANCES_DIR = DATA_DIR / "room_and_appliance_sensors" / "appliances_electric"
 PREPROCESS_DIR = DATA_DIR / "preprocess"

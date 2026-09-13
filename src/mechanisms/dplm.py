@@ -1,19 +1,25 @@
-'''
+"""
 Set num_readings to 1 for pointwise privacy. Additionally, mean is included and set to 0 by default.
 This seems to be what Ul Hassan et al. do in their tests. Standard deviation confirmed to be calculated
 via a two tailed approach — the paper they reference from Barbossa et al. states this directly (seriously
 why is there a standard deviation that does not line up with either of the variances in the example guys come on)
-'''
+"""
 
 import numpy as np
-from scipy.stats import norm
 
 
-def dplm_mechanism(readings: np.ndarray, norm_prob: float, epsilon: float, sensitivity: float,
-                   peak: int, num_readings: int = 1, excess: float = 0) -> tuple[np.ndarray, float]:
+def dplm_mechanism(
+    readings: np.ndarray,
+    norm_prob: float,
+    epsilon: float,
+    sensitivity: float,
+    peak: int,
+    num_readings: int = 1,
+    excess: float = 0,
+) -> tuple[np.ndarray, float]:
     """
-    Apply DPLM noise to every row of `df`, with peak clipping and
-    excess carry-over into the next reading.
+    Apply DPLM noise to every row of a numpy array of readings, with peak
+    clipping and excess carry-over into the next reading.
 
     - Noise scale is computed from the raw reading only.
     - Carried `excess` from the previous row is added AFTER noise.
@@ -25,16 +31,18 @@ def dplm_mechanism(readings: np.ndarray, norm_prob: float, epsilon: float, sensi
     that loop now does plain arithmetic with no per-row scipy/print overhead.
 
     Notably, the code here has been refactored using Eibl and Engel's ([17] in
-    Ul Hassan's paper) definition of the scale
+    Ul Hassan's paper) definition of the laplace scale. This is largely due to
+    a potential misunderstanding by the original authors, in which they ignore
+    the use of epsilon and sensitivity in favour of utilising peak and max max
+    error rate, resulting in erroneous sensitivity and/or epsilon values.
     """
+    # z_score = norm.interval(norm_prob)[1]
+    # max_error_percent = (sensitivity * z_score * np.sqrt(2 * num_readings)) / (
+    #     epsilon * peak
+    # )
+    # max_error_watts = max_error_percent * peak
 
-    # z_score / scale factor are constant across rows -> compute once.
-    z_score = norm.interval(norm_prob)[1]
-    print(z_score)
     laplace_scale = sensitivity / epsilon
-    max_error_percent = (sensitivity * z_score * np.sqrt(2 * num_readings)) / (epsilon * peak)
-    max_error_watts = max_error_percent * peak
-    print(f" Max Error in W: {max_error_watts} | Max Error Percentage: {max_error_percent}")
     print(f"Scale: {laplace_scale}")
 
     noise = np.random.laplace(loc=0.0, scale=laplace_scale, size=readings.shape)
@@ -47,7 +55,7 @@ def dplm_mechanism(readings: np.ndarray, norm_prob: float, epsilon: float, sensi
     for i in range(base.shape[0]):
         if np.isnan(base[i]):
             noisy_values[i] = np.nan
-            carry = 0.0                   # don't carry across a gap
+            carry = 0.0  # don't carry across a gap
             continue
         value = base[i] + carry
         if value >= peak:

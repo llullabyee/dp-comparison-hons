@@ -60,7 +60,9 @@ def ldp_energy_discretise(
     tbl: pa.Table, boundaries: np.ndarray
 ) -> tuple[pa.Table, int, int]:
     num_levels = boundaries.size - 1
-    dtype = np.min_scalar_type(num_levels)  # smallest uint dtype that fits num_levels
+    dtype = np.min_scalar_type(
+        num_levels
+    )  # smallest uint dtype that fits num_levels
     num_rows = tbl.num_rows
 
     appliance_names = [member.value for member in ApplianceList]
@@ -133,7 +135,7 @@ def ldp_energy_randomise(
     else:
         epsilon_col = epsilon_arr.reshape(n, 1)
 
-    sampled_mask = (epsilon_col != None).ravel()  # noqa: E711
+    sampled_mask = (epsilon_col != None).ravel()
 
     output = np.empty(bv.shape, dtype=np.int8)
 
@@ -194,7 +196,9 @@ def ldp_budget_distribution(
     for idx, row in enumerate(binary_vector):
         # %% Mechanism 1
         perturbed_row_t1 = perturbed_t1_all[idx]
-        dissimilarity = np.mean((perturbed_row_t1 - last_published_release) ** 2)
+        dissimilarity = np.mean(
+            (perturbed_row_t1 - last_published_release) ** 2
+        )
         # %% Mechanism 2
         eps_t2 = ((epsilon / 2) - sum(budget_spent)) / 2
         perturbed_row_t2 = ldp_energy_randomise(row, eps_t2)
@@ -209,7 +213,11 @@ def ldp_budget_distribution(
             budget_spent.append(0)
             budget_spent_arr.append(0)
             releases.append(last_published_release)
-    return np.array(releases), np.array(budget_spent_arr), last_published_release
+    return (
+        np.array(releases),
+        np.array(budget_spent_arr),
+        last_published_release,
+    )
 
 
 def ldp_budget_absorption(
@@ -240,9 +248,13 @@ def ldp_budget_absorption(
         else:
             # %% Mechanism 1, reordered for efficiency.
             perturbed_row_t1 = perturbed_t1_all[local_idx]
-            dissimilarity = np.mean((perturbed_row_t1 - last_published_release) ** 2)
+            dissimilarity = np.mean(
+                (perturbed_row_t1 - last_published_release) ** 2
+            )
             # %% Mechanism 2 (again)
-            absorption_count = (idx + 1) - (last_published_idx + nullification_count)
+            absorption_count = (idx + 1) - (
+                last_published_idx + nullification_count
+            )
             eps_t2 = eps_t1 * min(absorption_count, window_size)
             perturbed_row_t2 = ldp_energy_randomise(row, eps_t2)
             error = np.mean((perturbed_row_t2 - row) ** 2)
@@ -323,7 +335,9 @@ def ldp_energy_mechanism(
     perturbed_tbl = pa.table(
         {
             "timestamp": timestamp,
-            **{name: perturbed[:, i] for i, name in enumerate(tbl.column_names)},
+            **{
+                name: perturbed[:, i] for i, name in enumerate(tbl.column_names)
+            },
         }
     )
     return (

@@ -4,7 +4,11 @@ this code needs to be redone a bit to not do the meter dirs all at once.
 
 # %% import statements
 from collections import deque
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+)
 from functools import reduce
 from pathlib import Path
 
@@ -13,6 +17,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from src.data.load_data import make_run_dir
 from src.mechanisms.dplm import dplm_mechanism
 from src.mechanisms.gai import build_boundary_list, gai_aggregate, gai_mechanism
 from src.mechanisms.ldp_energy import (
@@ -23,7 +28,6 @@ from src.utils.appliance_map import ApplianceList
 from src.utils.config import (
     PREPROCESS_DIR,
     PREPROCESS_MAINS_DIR,
-    RESULT_DIR,
     load_params,
 )
 
@@ -42,21 +46,17 @@ mechanisms = ["LBU", "LSP", "LBD", "LBA"]
 preprocess_mains = PREPROCESS_MAINS_DIR
 preprocess_apps = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
 
-home_ids = sorted({p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")})
-days = sorted({p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")})
+home_ids = sorted(
+    {p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")}
+)
+days = sorted(
+    {p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")}
+)
 
 # %% directory creation
-run_dir = (
-    RESULT_DIR
-    / f"eps={epsilon:g}"
-    / f"w={window_size}"
-    / f"peak={peak:g}"
-    / f"sens={domain_max:g}"
+mains_dir, apps_dir, gai_dir, ldp_energy_dir = make_run_dir(
+    epsilon, window_size, peak, domain_max
 )
-mains_dir = run_dir / "main"
-apps_dir = run_dir / "appliances"
-gai_dir = run_dir / "gai_agg"
-ldp_energy_dir = run_dir / "ldp_energy_agg"
 mains_dir.mkdir(parents=True, exist_ok=True)
 apps_dir.mkdir(parents=True, exist_ok=True)
 gai_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +161,10 @@ def process_day(day):
         }
     )
     arr = np.column_stack(
-        [joined.column(c).to_numpy(zero_copy_only=False) for c in joined.column_names]
+        [
+            joined.column(c).to_numpy(zero_copy_only=False)
+            for c in joined.column_names
+        ]
     )
     del joined
 
@@ -196,7 +199,9 @@ def process_day(day):
         for i, t in enumerate(raw_tables):
             value_cols = [c for c in t.column_names if c != "timestamp"]
             mech_tables.append(
-                t.rename_columns(["timestamp"] + [f"{c}_{i}" for c in value_cols])
+                t.rename_columns(
+                    ["timestamp"] + [f"{c}_{i}" for c in value_cols]
+                )
             )
             col_groups.append([f"{c}_{i}" for c in value_cols])
         joined = reduce(
@@ -258,7 +263,9 @@ def main():
         with ProcessPoolExecutor(max_workers=12) as ex:  # tune to core count
             futures = {ex.submit(process_home, h): h for h in home_ids}
             for fut in as_completed(futures):
-                completed_home = fut.result()  # raises here if that home's work errored
+                completed_home = (
+                    fut.result()
+                )  # raises here if that home's work errored
                 print(f"Finished home {completed_home}")
     if not gai_ready or not ldp_ready:
         with ThreadPoolExecutor(max_workers=4) as executor:

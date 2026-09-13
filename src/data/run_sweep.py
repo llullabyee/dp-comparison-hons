@@ -9,9 +9,8 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import requests
 import yaml
 
-from src.utils.config import CONFIG_DIR
+from src.utils.config import SWEEP_CONFIG_PATH
 
-SWEEP_CONFIG_PATH = CONFIG_DIR / "sweep.yaml"
 HEARTBEAT_URL = "https://health.llullabyee.dev/api/push/IZUbT8ukPP37i4XF8aSOBLfv26rBqx1R?status=up&msg=OK&ping="
 PING_INTERVAL = 30
 stop_event = threading.Event()

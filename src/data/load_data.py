@@ -1,18 +1,24 @@
-import os
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from src.utils.config import RESULT_DIR
 
-def make_dirs(parts, filename):
-    if isinstance(parts, (str, os.PathLike)):
-        dir = os.path.join(parts)
-    else:
-        dir = os.path.join(*parts)
-    os.makedirs(dir, exist_ok=True)
-    fp = os.path.join(dir, filename)
-    return dir, fp
+
+def make_run_dir(epsilon, window_size, peak, domain_max):
+    run_dir = (
+        RESULT_DIR
+        / f"eps={epsilon:g}"
+        / f"w={window_size}"
+        / f"peak={peak:g}"
+        / f"sens={domain_max:g}"
+    )
+    mains_dir = run_dir / "main"
+    apps_dir = run_dir / "appliances"
+    gai_dir = run_dir / "gai_agg"
+    ldp_energy_dir = run_dir / "ldp_energy_agg"
+    return mains_dir, apps_dir, gai_dir, ldp_energy_dir
 
 
 # def load_data(directory: str|Path) -> tuple[pd.DataFrame, str, str]:

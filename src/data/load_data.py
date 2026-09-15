@@ -18,7 +18,7 @@ def make_run_dir(epsilon, window_size, peak, domain_max):
     apps_dir = run_dir / "appliances"
     gai_dir = run_dir / "gai_agg"
     ldp_energy_dir = run_dir / "ldp_energy_agg"
-    return mains_dir, apps_dir, gai_dir, ldp_energy_dir
+    return run_dir, mains_dir, apps_dir, gai_dir, ldp_energy_dir
 
 
 # def load_data(directory: str|Path) -> tuple[pd.DataFrame, str, str]:

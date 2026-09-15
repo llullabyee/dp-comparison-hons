@@ -98,5 +98,24 @@ try:
                 msg = f"[{tag}] FAILED mechanisms (exit {result.returncode})"
                 print(f"  {msg} — see {log_path}")
                 send_failure_ping(msg)
+                continue
+        log_path = logs_dir / f"{tag}_utility.log"
+        with open(log_path, "w") as log_file:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "analysis.utility",
+                    "--config",
+                    str(config_path),
+                ],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+            if result.returncode != 0:
+                msg = f"[{tag}] FAILED preprocess (exit {result.returncode})"
+                print(f"  {msg} — see {log_path}")
+                send_failure_ping(msg)
+                continue  # skip mechanisms run if preprocessing failed
 finally:
     stop_event.set()

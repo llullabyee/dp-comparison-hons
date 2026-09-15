@@ -11,7 +11,7 @@ def load_params():
     raise ValueError("No config provided")
 
 
-DATA_DIR = Path(r"Y:\IDEAL")
+DATA_DIR = Path("/Volumes/lullaby-nas/IDEAL")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "config"
 SWEEP_CONFIG_PATH = CONFIG_DIR / "sweep.yaml"
@@ -26,3 +26,5 @@ PERTURBED_MAINS_DIR = RESULT_DIR / "mains"
 PERTURBED_APPS_DIR = RESULT_DIR / "appliances"
 SRC_DIR = PROJECT_ROOT / "src"
 UTIL_DIR = SRC_DIR / "utils"
+
+MECHANISMS = ["LBU", "LSP", "LBD", "LBA"]

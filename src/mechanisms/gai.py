@@ -1,4 +1,5 @@
 import numpy as np
+import pyarrow as pa
 
 
 def build_boundary_list(epsilon: float, max_value: int) -> np.ndarray:
@@ -9,9 +10,12 @@ def build_boundary_list(epsilon: float, max_value: int) -> np.ndarray:
     so higher privacy budgets (larger epsilon) allow a finer grid. The chosen
     number of points is then spread evenly (integer-valued) across the domain.
     """
-    count = max(2, round(3 * np.exp(epsilon) + 2))
-    step = max_value / (count - 1)
-    return np.asarray([round(i * step) for i in range(count)])
+    target_count = round(3 * np.exp(epsilon) + 2)
+    count = max(2, min(max_value + 1, target_count))
+    return np.unique(np.round(np.linspace(0, max_value, count)).astype(int))
+    # count = max(2, round(3 * np.exp(epsilon) + 2))
+    # step = max_value / (count - 1)
+    # return np.asarray([round(i * step) for i in range(count)])
 
 
 def return_bounds(column, boundaries, interval_size):
@@ -24,7 +28,9 @@ def return_bounds(column, boundaries, interval_size):
         boundaries[np.clip(idx, 0, interval_size - 1)],
         boundaries[np.clip(idx - 1, 0, interval_size - 1)],
     )
-    upper = np.where(exact, lower, boundaries[np.clip(idx, 0, interval_size - 1)])
+    upper = np.where(
+        exact, lower, boundaries[np.clip(idx, 0, interval_size - 1)]
+    )
     return lower, upper
 
 
@@ -56,7 +62,9 @@ def gai_mechanism(
     exp_eps = np.exp(epsilon)
     p_prob = exp_eps / (n_int - 1 + exp_eps)
 
-    pos = np.searchsorted(boundaries, discretised)  # index of each discretised value
+    pos = np.searchsorted(
+        boundaries, discretised
+    )  # index of each discretised value
     keep = np.random.random(n) < p_prob
 
     # uniform pick among the (n_int - 1) values that are not `pos`
@@ -68,7 +76,10 @@ def gai_mechanism(
 
 
 def gai_aggregate(
-    arr: np.ndarray, epsilon: float, num_boundaries: int, boundary_list: np.ndarray
+    arr: np.ndarray,
+    epsilon: float,
+    num_boundaries: int,
+    boundary_list: np.ndarray,
 ):
     q_prob = 1 / (num_boundaries - 1 + np.exp(epsilon))
     p_prob = np.exp(epsilon) * q_prob
@@ -91,3 +102,19 @@ def gai_aggregate(
         p_prob - q_prob
     )
     return aggregated_perturbed_values
+
+
+def gai_counts_to_power(tbl: pa.Table) -> np.ndarray:
+    """
+    Reconstructs total power per timestamp from GAI's debiased per-boundary
+    counts: R = sum_j y_j * Phi(y_j), where column headers are Phi(y_j)
+    (boundary wattage) and column values are y_j (debiased count).
+    """
+    level_cols = [c for c in tbl.column_names if c != "timestamp"]
+    boundary_values = np.array([float(c) for c in level_cols])
+
+    counts = np.column_stack(
+        [tbl.column(c).to_numpy(zero_copy_only=False) for c in level_cols]
+    )
+    reconstructed = counts @ boundary_values
+    return reconstructed

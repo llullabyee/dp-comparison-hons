@@ -26,6 +26,7 @@ from src.mechanisms.ldp_energy import (
 )
 from src.utils.appliance_map import ApplianceList
 from src.utils.config import (
+    MECHANISMS,
     PREPROCESS_DIR,
     PREPROCESS_MAINS_DIR,
     load_params,
@@ -41,7 +42,6 @@ domain_max = params["domain_max"]
 boundary_list = build_boundary_list(epsilon, domain_max)
 appliance_list = list(ApplianceList)
 num_boundaries = len(boundary_list)
-mechanisms = ["LBU", "LSP", "LBD", "LBA"]
 
 preprocess_mains = PREPROCESS_MAINS_DIR
 preprocess_apps = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
@@ -54,7 +54,7 @@ days = sorted(
 )
 
 # %% directory creation
-mains_dir, apps_dir, gai_dir, ldp_energy_dir = make_run_dir(
+run_dir, mains_dir, apps_dir, gai_dir, ldp_energy_dir = make_run_dir(
     epsilon, window_size, peak, domain_max
 )
 mains_dir.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,7 @@ def process_home(home_id):
             global_idx=0,
             excess=0,
         )
-        for m in mechanisms
+        for m in MECHANISMS
     }
     fps = sorted(preprocess_mains.glob(f"{home_id}_*.parquet"))
 
@@ -111,7 +111,7 @@ def process_home(home_id):
         # process already gets its parallelism from running alongside
         # other homes' processes, so no inner thread/process pool here
         # (avoids oversubscribing cores).
-        for mechanism in mechanisms:
+        for mechanism in MECHANISMS:
             state = mechanism_state[mechanism]
             (
                 ldp_noise,
@@ -190,7 +190,7 @@ def process_day(day):
     print(f"Gai Debiasing — homes reported {day}: {agg_home_ids}")
 
     # %% LDP-Energy aggregation
-    for mechanism in mechanisms:
+    for mechanism in MECHANISMS:
         appliance_fps = sorted(apps_dir.glob(f"*_{day}_{mechanism}.parquet"))
         agg_home_ids = [fp.stem.split("_")[0] for fp in appliance_fps]
         raw_tables = [pq.read_table(fp) for fp in appliance_fps]

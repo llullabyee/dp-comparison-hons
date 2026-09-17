@@ -9,7 +9,13 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from src.data.load_data import make_run_dir
-from src.mechanisms.gai import build_boundary_list, gai_aggregate
+from src.mechanisms.gai import (
+    build_boundary_list,
+    gai_aggregate,
+    gai_discretise,
+    return_bounds,
+    true_aggregate,
+)
 from src.mechanisms.ldp_energy import ldp_aggregate
 from src.utils.config import (
     MECHANISMS,
@@ -74,7 +80,12 @@ def raw_aggregate(home_ids, day, directory, col_name):
         [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
     )
     values = np.nan_to_num(values, nan=0.0)
-    return np.sum(values, axis=1)
+    lower, upper = return_bounds(values, boundary_list, boundary_list.size)
+    values = gai_discretise(values, upper, lower)
+    counts, _, _, _ = true_aggregate(
+        values, epsilon, boundary_list.size, boundary_list
+    )
+    return counts
 
 
 def aggregation_counts(home_ids, day, directory):

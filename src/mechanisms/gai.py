@@ -60,12 +60,13 @@ def return_bounds(column, boundaries, interval_size):
     return lower, upper
 
 
-def gai_discretise(readings, upper, lower, n):
-    # choose upper with prob (x - lower) / (upper - lower), else lower.
+def gai_discretise(readings, upper, lower):
     span = (upper - lower).astype(float)
     with np.errstate(divide="ignore", invalid="ignore"):
         v_prob = np.where(span > 0, (readings - lower) / span, 0.0)
-    discretised = np.where(np.random.random(n) < v_prob, upper, lower)
+    discretised = np.where(
+        np.random.random(readings.shape) < v_prob, upper, lower
+    )
     return discretised
 
 
@@ -104,7 +105,7 @@ def gai_mechanism(
     lower, upper = return_bounds(readings, boundaries, n_int)
 
     # ---- gai_discretise ------------------------------------------------------
-    discretised = gai_discretise(readings, upper, lower, n)
+    discretised = gai_discretise(readings, upper, lower)
 
     # ---- gai_perturb ---------------------------------------------------------
     perturbed = gai_perturb(epsilon, n, n_int, boundaries, discretised)

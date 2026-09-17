@@ -5,15 +5,11 @@ import pandas as pd
 
 sys.path.insert(0, "/Users/lullaby/Projects/University/DP-ML-Hons")
 
-from src.data.load_data import load_data
-from src.utils.config import PREPROCESS_DIR
-
-# %%
-gen = load_data(PREPROCESS_DIR / "mains")
-next(gen)
 # %%
 
-df = pd.read_parquet("../data/eco/preprocess/mains/sm_01.parquet")
+df = pd.read_parquet(
+    "/Volumes/lullaby-nas/IDEAL/preprocess/eps=1/sens=1500/ldp_energy/2018-04-01.parquet"
+)
 df
 
 # %%

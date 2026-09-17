@@ -69,13 +69,12 @@ def raw_aggregate(home_ids, day, directory, col_name):
         tbl = tbl.rename_columns(["timestamp", home_id])
         joined = joined.join(tbl, keys="timestamp", join_type="full outer")
     joined = joined.sort_by("timestamp")
-    # home_cols = [c for c in joined.column_names if c != "timestamp"]
-    # values = np.column_stack(
-    #     [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
-    # )
-    # values = np.nan_to_num(values, nan=0.0)
-    # return joined, np.sum(values, axis=1)
-    return joined
+    home_cols = [c for c in joined.column_names if c != "timestamp"]
+    values = np.column_stack(
+        [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
+    )
+    values = np.nan_to_num(values, nan=0.0)
+    return np.sum(values, axis=1)
 
 
 def aggregation_counts(home_ids, day, directory):
@@ -101,16 +100,15 @@ def aggregation_counts(home_ids, day, directory):
         joined = joined.join(tbl, keys="timestamp", join_type="full outer")
         loaded_home_ids.append(home_id)
     joined = joined.sort_by("timestamp")
-    # num_timestamps = joined.num_rows
-    # num_users = len(loaded_home_ids)
-    # home_cols = [c for c in joined.column_names if c != "timestamp"]
-    # values = np.column_stack(
-    #     [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
-    # )
-    # values = np.nan_to_num(values, nan=0.0, copy=False)
-    # values = values.reshape(num_timestamps, num_users, num_appliances)
-    # return joined, np.sum(values, axis=1)
-    return joined
+    num_timestamps = joined.num_rows
+    num_users = len(loaded_home_ids)
+    home_cols = [c for c in joined.column_names if c != "timestamp"]
+    values = np.column_stack(
+        [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
+    )
+    values = np.nan_to_num(values, nan=0.0, copy=False)
+    values = values.reshape(num_timestamps, num_users, num_appliances)
+    return np.sum(values, axis=1)
 
 
 def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_energy_dir):

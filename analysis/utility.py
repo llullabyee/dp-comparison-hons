@@ -81,40 +81,6 @@ def max_error_rate(
     return max_error_watts, max_error_percent
 
 
-def aggregation_counts(home_ids, day, directory):
-    fp = directory / f"{home_ids[0]}_{day}.parquet"
-    joined = pq.read_table(fp)
-    num_appliances = joined.num_columns - 1
-    new_names = [
-        f"{home_ids[0]}_{name}" if name != "timestamp" else name
-        for name in joined.column_names
-    ]
-    joined = joined.rename_columns(new_names)
-    loaded_home_ids = [home_ids[0]]
-    for home_id in home_ids[1:]:
-        fp = directory / f"{home_id}_{day}.parquet"
-        if not fp.exists():
-            continue
-        tbl = pq.read_table(fp)
-        new_names = [
-            f"{home_id}_{name}" if name != "timestamp" else name
-            for name in tbl.column_names
-        ]
-        tbl = tbl.rename_columns(new_names)
-        joined = joined.join(tbl, keys="timestamp", join_type="full outer")
-        loaded_home_ids.append(home_id)
-    joined = joined.sort_by("timestamp")
-    num_timestamps = joined.num_rows
-    num_users = len(loaded_home_ids)
-    home_cols = [c for c in joined.column_names if c != "timestamp"]
-    values = np.column_stack(
-        [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
-    )
-    values = np.nan_to_num(values, nan=0.0, copy=False)
-    values = values.reshape(num_timestamps, num_users, num_appliances)
-    return joined, np.sum(values, axis=1)
-
-
 def process_stats(
     stats: dict,
     day: str,

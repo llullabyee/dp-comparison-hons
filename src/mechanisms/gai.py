@@ -18,7 +18,31 @@ def build_boundary_list(epsilon: float, max_value: int) -> np.ndarray:
     # return np.asarray([round(i * step) for i in range(count)])
 
 
+# def return_bounds(column, boundaries, interval_size):
+#     idx = np.searchsorted(boundaries, column, side="left")
+#     exact = (idx < interval_size) & (
+#         boundaries[np.clip(idx, 0, interval_size - 1)] == column
+#     )
+#     lower = np.where(
+#         exact,
+#         boundaries[np.clip(idx, 0, interval_size - 1)],
+#         boundaries[np.clip(idx - 1, 0, interval_size - 1)],
+#     )
+#     upper = np.where(
+#         exact, lower, boundaries[np.clip(idx, 0, interval_size - 1)]
+#     )
+#     return lower, upper
+
+
 def return_bounds(column, boundaries, interval_size):
+    """
+    finds the boundaries of values, where the boundaries are
+    determined by [u,v). If a value falls on an exact boundary,
+    the value will be made the lower bound (u) whilst the next
+    boundary will be its upper bound. Assumption made: for a value
+    falling on or greater than the bounds listed, it will be clipped
+    (lower = upper)
+    """
     idx = np.searchsorted(boundaries, column, side="left")
     exact = (idx < interval_size) & (
         boundaries[np.clip(idx, 0, interval_size - 1)] == column
@@ -29,34 +53,23 @@ def return_bounds(column, boundaries, interval_size):
         boundaries[np.clip(idx - 1, 0, interval_size - 1)],
     )
     upper = np.where(
-        exact, lower, boundaries[np.clip(idx, 0, interval_size - 1)]
+        exact,
+        boundaries[np.clip(idx + 1, 0, interval_size - 1)],
+        boundaries[np.clip(idx, 0, interval_size - 1)],
     )
     return lower, upper
 
 
-def gai_mechanism(
-    readings: np.ndarray, boundaries: np.ndarray, epsilon: float
-) -> np.ndarray:
-    """
-    Vectorised GAI mechanism.
-
-    Produces the ``perturbed`` column with statistics identical to applying
-    ``find_bounds`` -> ``gai_discretise`` -> ``gai_perturb`` row-by-row, but
-    computed over the whole column with numpy instead of per-row Python loops.
-    """
-    n_int = boundaries.size
-    n = readings.size
-
-    lower, upper = return_bounds(readings, boundaries, n_int)
-
-    # ---- gai_discretise ------------------------------------------------------
+def gai_discretise(readings, upper, lower, n):
     # choose upper with prob (x - lower) / (upper - lower), else lower.
     span = (upper - lower).astype(float)
     with np.errstate(divide="ignore", invalid="ignore"):
         v_prob = np.where(span > 0, (readings - lower) / span, 0.0)
     discretised = np.where(np.random.random(n) < v_prob, upper, lower)
+    return discretised
 
-    # ---- gai_perturb ---------------------------------------------------------
+
+def gai_perturb(epsilon, n, n_int, boundaries, discretised):
     # keep true value with prob p = e^eps / (n_int - 1 + e^eps),
     # otherwise pick uniformly among the other n_int - 1 intervals.
     exp_eps = np.exp(epsilon)
@@ -75,7 +88,30 @@ def gai_mechanism(
     return boundaries[result_idx]
 
 
-def gai_aggregate(
+def gai_mechanism(
+    readings: np.ndarray, boundaries: np.ndarray, epsilon: float
+) -> np.ndarray:
+    """
+    Vectorised GAI mechanism.
+
+    Produces the ``perturbed`` column with statistics identical to applying
+    ``find_bounds`` -> ``gai_discretise`` -> ``gai_perturb`` row-by-row, but
+    computed over the whole column with numpy instead of per-row Python loops.
+    """
+    n_int = boundaries.size
+    n = readings.size
+
+    lower, upper = return_bounds(readings, boundaries, n_int)
+
+    # ---- gai_discretise ------------------------------------------------------
+    discretised = gai_discretise(readings, upper, lower, n)
+
+    # ---- gai_perturb ---------------------------------------------------------
+    perturbed = gai_perturb(epsilon, n, n_int, boundaries, discretised)
+    return perturbed
+
+
+def true_aggregate(
     arr: np.ndarray,
     epsilon: float,
     num_boundaries: int,
@@ -96,6 +132,18 @@ def gai_aggregate(
     flat_idx = row_ids * num_boundaries + col_idx[inv]
     counts = np.bincount(flat_idx, minlength=n * num_boundaries).reshape(
         n, num_boundaries
+    )
+    return counts, n_reports, q_prob, p_prob
+
+
+def gai_aggregate(
+    arr: np.ndarray,
+    epsilon: float,
+    num_boundaries: int,
+    boundary_list: np.ndarray,
+):
+    counts, n_reports, q_prob, p_prob = true_aggregate(
+        arr, epsilon, num_boundaries, boundary_list
     )
 
     aggregated_perturbed_values = (counts - n_reports[:, None] * q_prob) / (

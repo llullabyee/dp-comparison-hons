@@ -239,6 +239,9 @@ def main():
     )
     utils_dir = run_dir / "utility"
     utils_dir.mkdir(parents=True, exist_ok=True)
+    out = run_dir / "utility.csv"
+    if out.exists():
+        return
     home_ids = sorted(
         {p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")}
     )
@@ -281,7 +284,6 @@ def main():
             )
 
     table = create_table(days, stats)
-    out = run_dir / "utility.csv"
     csv.write_csv(table, out)
 
 

@@ -238,12 +238,8 @@ def _run_day(
     preprocess_aggregate_ldp_fp = (
         preprocess_aggregate_ldp_dir / f"{day}.parquet"
     )
-    preprocess_main_ready = preprocess_aggregate_gai_dir.exists() and any(
-        preprocess_aggregate_gai_dir.iterdir()
-    )
-    preprocess_app_ready = preprocess_aggregate_ldp_dir.exists() and any(
-        preprocess_aggregate_ldp_dir.iterdir()
-    )
+    preprocess_main_ready = preprocess_aggregate_gai_dir.exists() and (len(list(preprocess_aggregate_gai_dir.glob("*.parquet"))) == 30)
+    preprocess_app_ready = preprocess_aggregate_ldp_dir.exists() and (len(list(preprocess_aggregate_ldp_dir.glob("*.parquet"))) == 30)
     gai_ready = gai_dir.exists() and any(gai_dir.iterdir())
     ldp_ready = ldp_energy_dir.exists() and any(ldp_energy_dir.iterdir())
 
@@ -254,6 +250,7 @@ def _run_day(
         )
         print(f"[{day}] writing aggregate parquet preprocess mains file...")
         pq.write_table(mains_agg_tbl, preprocess_aggregate_gai_fp)
+        del mains_agg_tbl
     else:
         print(f"[{day}] raw_aggregate (mains) already exists. Skipping...")
 
@@ -262,6 +259,7 @@ def _run_day(
         apps_agg_tbl = aggregation_counts(home_ids, day, preprocess_apps)
         print(f"[{day}] writing aggregate parquet preprocess apps file...")
         pq.write_table(apps_agg_tbl, preprocess_aggregate_ldp_fp)
+        del apps_agg_tbl
     else:
         print(
             f"[{day}] aggregation_counts (appliances) already exists. Skipping..."
@@ -282,7 +280,7 @@ def _run_day(
 
 
 def main(home_ids, max_workers=4, use_processes=True):
-    preprocess_aggregate_gai_dir = preprocess_apps / "gai"
+    preprocess_aggregate_gai_dir = preprocess_mains / "gai"
     preprocess_aggregate_ldp_dir = preprocess_apps / "ldp_energy"
     preprocess_aggregate_gai_dir.mkdir(parents=True, exist_ok=True)
     preprocess_aggregate_ldp_dir.mkdir(parents=True, exist_ok=True)

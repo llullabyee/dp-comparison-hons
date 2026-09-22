@@ -39,12 +39,15 @@ epsilon = params["epsilon"]
 window_size = params["window_size"]
 domain_max = params["domain_max"]
 
-boundary_list = build_boundary_list(epsilon, domain_max)
+# boundary_list = build_boundary_list(epsilon, domain_max)
+boundary_list = np.linspace(0, domain_max, 10 + 1)
 appliance_list = list(ApplianceList)
 num_boundaries = len(boundary_list)
 
 preprocess_mains = PREPROCESS_MAINS_DIR
-preprocess_apps = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
+# preprocess_apps = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
+preprocess_apps = PREPROCESS_DIR / f"sens={domain_max:g}"
+
 
 home_ids = sorted(
     {p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")}
@@ -139,118 +142,6 @@ def process_home(home_id):
     return home_id
 
 
-def process_day(day):
-    mains_fps = sorted(mains_dir.glob(f"*_{day}.parquet"))
-    agg_home_ids = [fp.stem.split("_")[0] for fp in mains_fps]
-    tables = [
-        pq.read_table(fp, columns=["timestamp", "gai_noise"]).rename_columns(
-            ["timestamp", f"g{i}"]
-        )
-        for i, fp in enumerate(mains_fps)
-    ]
-    joined = reduce(
-        lambda l, r: l.join(r, keys="timestamp", join_type="full outer"), tables
-    ).sort_by("timestamp")
-    del tables
-    timestamps = joined.column("timestamp")
-    joined = joined.drop_columns("timestamp")
-    joined = pa.table(
-        {
-            c: pc.fill_null(pc.cast(joined.column(c), pa.int16()), -1)
-            for c in joined.column_names
-        }
-    )
-    arr = np.column_stack(
-        [
-            joined.column(c).to_numpy(zero_copy_only=False)
-            for c in joined.column_names
-        ]
-    )
-    del joined
-
-    # %% gai aggregation
-    aggregated_perturbed_values = gai_aggregate(
-        arr, epsilon, num_boundaries, boundary_list
-    )
-    del arr
-    gai_freq_tbl = pa.table(
-        {
-            "timestamp": timestamps,
-            **{
-                f"{b:g}": aggregated_perturbed_values[:, j]
-                for j, b in enumerate(boundary_list)
-            },
-        }
-    )
-    del aggregated_perturbed_values
-    gai_freq_fp = gai_dir / f"{day}_gai.parquet"
-    Path(gai_freq_fp).parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(gai_freq_tbl, gai_freq_fp)
-    del gai_freq_tbl
-    print(f"Gai Debiasing — homes reported {day}: {agg_home_ids}")
-
-    # %% LDP-Energy aggregation
-    for mechanism in MECHANISMS:
-        appliance_fps = sorted(apps_dir.glob(f"*_{day}_{mechanism}.parquet"))
-        agg_home_ids = [fp.stem.split("_")[0] for fp in appliance_fps]
-        raw_tables = [pq.read_table(fp) for fp in appliance_fps]
-        mech_tables = []
-        col_groups = []
-        for i, t in enumerate(raw_tables):
-            value_cols = [c for c in t.column_names if c != "timestamp"]
-            mech_tables.append(
-                t.rename_columns(
-                    ["timestamp"] + [f"{c}_{i}" for c in value_cols]
-                )
-            )
-            col_groups.append([f"{c}_{i}" for c in value_cols])
-        joined = reduce(
-            lambda l, r: l.join(r, keys="timestamp", join_type="full outer"),
-            mech_tables,
-        ).sort_by("timestamp")
-        del raw_tables, mech_tables
-        timestamps = joined.column("timestamp")
-        joined = joined.drop_columns("timestamp")
-        joined = pa.table(
-            {
-                c: pc.fill_null(pc.cast(joined.column(c), pa.int8()), -1)
-                for c in joined.column_names
-            }
-        )
-
-        mech_arrs = [
-            np.column_stack(
-                [joined.column(c).to_numpy(zero_copy_only=False) for c in group]
-            )
-            for group in col_groups
-        ]
-        del joined
-        mech_arrs = np.hstack(mech_arrs)
-        mech_arrs = mech_arrs.reshape(mech_arrs.shape[0], len(col_groups), -1)
-
-        aggregated_perturbed_values = ldp_aggregate(mech_arrs, epsilon)
-        del mech_arrs
-        appliance_names = [c.rsplit("_", 1)[0] for c in col_groups[0]]
-
-        ldp_agg_tbl = pa.table(
-            {
-                "timestamp": timestamps,
-                **{
-                    name: aggregated_perturbed_values[:, j]
-                    for j, name in enumerate(appliance_names)
-                },
-            }
-        )
-        del aggregated_perturbed_values
-        mechanism_freq_fp = ldp_energy_dir / f"{day}_{mechanism}.parquet"
-        Path(mechanism_freq_fp).parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(ldp_agg_tbl, mechanism_freq_fp)
-        del ldp_agg_tbl
-        print(f"Appliance Debiasing — homes reported {day}: {agg_home_ids}")
-
-    return day
-
-
 # %% outer loop for perturbation — one process per home
 def main():
     mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
@@ -267,12 +158,6 @@ def main():
                     fut.result()
                 )  # raises here if that home's work errored
                 print(f"Finished home {completed_home}")
-    if not gai_ready or not ldp_ready:
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = {executor.submit(process_day, day): day for day in days}
-            for future in as_completed(futures):
-                day = futures[future]
-                future.result()
 
 
 if __name__ == "__main__":

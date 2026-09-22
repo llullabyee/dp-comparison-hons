@@ -40,7 +40,8 @@ domain_max = params["domain_max"]
 
 # %% directory creation
 mains_dir = PREPROCESS_MAINS_DIR
-apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
+# apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
+apps_dir = PREPROCESS_DIR / f"sens={domain_max:g}"
 
 
 # --- stage 1: per-household mains/appliance merge -------------------------
@@ -166,12 +167,9 @@ def main(max_workers=12):
             start_ts=START_TIMESTAMP, end_ts=END_TIMESTAMP, max_workers=max_workers
         )
 
-    boundary_list = build_boundary_list(epsilon, domain_max)
+    # boundary_list = build_boundary_list(epsilon, domain_max)
+    boundary_list = np.linspace(0, domain_max, 10 + 1) # 10 is number of intervals
     preprocess_binary_vector(boundary_list, max_workers=max_workers)
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":

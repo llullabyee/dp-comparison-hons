@@ -1,5 +1,5 @@
 sweep:
   peak: [1500]
-  epsilon: [1.0, 2.0, 10.0] # 65.91 when paired w/ a domain_max of 3000 is equivalent to laplace of 45.52, aka DPLM base experiment
+  epsilon: [1.0, 2.0, 10.0]
   window_size: [3]
-  domain_max: [1500, 2000, 3000, 45.52]
+  domain_max: [1500, 2000, 3000] # 45.52 as well, just commented out for agg sweep.

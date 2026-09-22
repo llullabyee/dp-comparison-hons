@@ -291,8 +291,11 @@ def ldp_energy_mechanism(
     global_idx: int = 0,
     excess: int = 0,
 ):
-    timestamp = tbl.column("timestamp")
-    tbl = tbl.drop_columns(["timestamp"])
+    if "timestamp" in tbl.column_names:
+        timestamp = tbl.column("timestamp")
+        tbl = tbl.drop_columns(["timestamp"])
+    else:
+        timestamp = None
     bin_vector_arr = np.column_stack(
         [tbl.column(name).to_numpy() for name in tbl.column_names]
     )
@@ -334,7 +337,7 @@ def ldp_energy_mechanism(
 
     perturbed_tbl = pa.table(
         {
-            "timestamp": timestamp,
+            **({"timestamp": timestamp} if timestamp is not None else {}),
             **{
                 name: perturbed[:, i] for i, name in enumerate(tbl.column_names)
             },
@@ -353,7 +356,7 @@ def ldp_energy_mechanism(
 
 def ldp_aggregate(tables: np.ndarray, epsilon: float):
     q_prob = ldp_probability(epsilon)
-    mask = tables != -1
+    mask = tables != -1 & (~np.isnan(tables))
     n_reports = mask.sum(axis=1)  # (t, m) — users reporting, per appliance
     sums = np.where(mask, tables, 0).sum(axis=1)  # (t, m)
     aggregated_perturbed_values = (sums - n_reports * q_prob) / (0.5 - q_prob)

@@ -120,14 +120,14 @@ def process_stats(
                 f"{prefix}counts_difference": difference,
             }
         )
-    h_stat, p_val = kruskal_wallis(true_vals, perturbed_vals)
+    # h_stat, p_val = kruskal_wallis(true_vals, perturbed_vals)
     stats[day].update(
         {
             f"{prefix}rmse": rmse(true_vals, perturbed_vals),
             f"{prefix}smape": smape(true_vals, perturbed_vals),
             f"{prefix}mae": mae(true_vals, perturbed_vals),
-            f"{prefix}kruskal-wallis_h_stat": h_stat,
-            f"{prefix}kruskal-wallis_p_val": p_val,
+            # f"{prefix}kruskal-wallis_h_stat": h_stat,
+            # f"{prefix}kruskal-wallis_p_val": p_val,
         }
     )
 
@@ -159,7 +159,7 @@ def run_utils(home_id: str, days: list[str], perturbed_dir: Path) -> pa.Table:
     return table
 
 
-def raw_aggregate(home_ids, day, directory, col_name):
+def dplm_aggregate(home_ids, day, directory, col_name):
     """
     Joins all homes' readings for one day on 'timestamp' (selecting col_name
     per home), then sums across homes to produce a population-level aggregate.
@@ -200,6 +200,7 @@ def main():
     preprocess_apps = (
         PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
     )
+    preprocess_apps = PREPROCESS_DIR / f"sens={domain_max:g}"
     run_dir, mains_dir, apps_dir, gai_dir, ldp_energy_dir = make_run_dir(
         epsilon, window_size, peak, domain_max
     )
@@ -216,19 +217,65 @@ def main():
     )
     stats = {}
     for day in days:
-        gai_fp = gai_dir / f"{day}_gai.parquet"
-        _, mains_sum = raw_aggregate(
+        # dplm utility
+        _, mains_sum = dplm_aggregate(
             home_ids, day, PREPROCESS_MAINS_DIR, "mains"
         )
-
-        _, dplm_sum = raw_aggregate(home_ids, day, mains_dir, "dplm_noise")
+        _, dplm_sum = dplm_aggregate(home_ids, day, mains_dir, "dplm_noise")
         process_stats(stats, day, mains_sum, dplm_sum, "dplm")
 
-        gai_sum = gai_counts_to_power(pq.read_table(gai_fp))
-        process_stats(stats, day, mains_sum, gai_sum, "gai")
+        # 45.52 only useful for dplm.
+        if epsilon == 45.52:
+            table = create_table(days, stats)
+            csv.write_csv(table, out)
+            return
 
-        _, raw_appliance_counts = aggregation_counts(
-            home_ids, day, preprocess_apps
+        # gai utility - power comparison
+        gai_fp = gai_dir / f"{day}_gai.parquet"
+        gai_agg_tbl = pq.read_table(gai_fp)
+        gai_power_sum = gai_counts_to_power(gai_agg_tbl)
+        process_stats(stats, day, mains_sum, gai_power_sum, "gai_power")
+
+        # gai utility - counts comparison
+        preprocess_gai_fp = PREPROCESS_MAINS_DIR / "gai" / f"{day}.parquet"
+        preprocess_gai_tbl = pq.read_table(preprocess_gai_fp).drop_columns(
+            "timestamp"
+        )
+        gai_agg_tbl = gai_agg_tbl.drop_columns("timestamp")
+        preprocess_gai_aggregate_counts = np.column_stack(
+            [
+                preprocess_gai_tbl[n].to_numpy()
+                for n in preprocess_gai_tbl.column_names
+            ]
+        )
+        gai_agg_arr = np.column_stack(
+            [gai_agg_tbl[n].to_numpy() for n in gai_agg_tbl.column_names]
+        )
+        print(gai_agg_tbl.schema.types)
+        print(preprocess_gai_tbl.schema.types)
+        print(
+            set(preprocess_gai_tbl.column_names) - set(gai_agg_tbl.column_names)
+        )
+        print(f"preprocess: {preprocess_gai_tbl.column_names}")
+        print(f"after: {gai_agg_tbl.column_names}")
+
+        del preprocess_gai_tbl, gai_agg_tbl
+        process_stats(
+            stats,
+            day,
+            preprocess_gai_aggregate_counts,
+            gai_agg_arr,
+            "gai_counts",
+        )
+
+        # ldp energy - utility
+        raw_apps_fp = preprocess_apps / "ldp_energy" / f"{day}.parquet"
+        raw_appliance_tbl = pq.read_table(raw_apps_fp).drop_columns("timestamp")
+        raw_appliance_counts = np.column_stack(
+            [
+                raw_appliance_tbl[n].to_numpy()
+                for n in raw_appliance_tbl.column_names
+            ]
         )
         for mechanism in MECHANISMS:
             file = ldp_energy_dir / f"{day}_{mechanism}.parquet"

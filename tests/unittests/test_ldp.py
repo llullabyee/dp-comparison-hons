@@ -67,7 +67,7 @@ def test_energy_randomise(
 # %%
 
 
-epsilon = 1.0
+epsilon = 10
 domain_max = 76000  # ~95th percentile value from one of the homes. Determined by pasting into claude and asking it to determine it lowkey.
 num_subintervals = 10
 window_size = 3
@@ -158,10 +158,9 @@ perturbed_arr
 n_homes = len(perturbed)
 m = len(next(iter(perturbed.values())).column_names) - 1
 
-perturbed_agg = ldp_aggregate(
-    perturbed_arr, (epsilon / window_size), n_homes, m
-)
-true_agg = raw_aggregate(true_arr, (epsilon / window_size), n_homes, m)
+eps = epsilon / window_size
+perturbed_agg = ldp_aggregate(perturbed_arr, eps, n_homes, m)
+true_agg = raw_aggregate(true_arr, eps, n_homes, m)
 
 df = pd.DataFrame(perturbed_agg)
 df

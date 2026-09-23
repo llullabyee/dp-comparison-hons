@@ -8,7 +8,7 @@ sys.path.insert(0, "/Users/lullaby/Projects/University/DP-ML-Hons")
 # %%
 
 df = pd.read_parquet(
-    "/Volumes/lullaby-nas/IDEAL/preprocess/eps=1/sens=1500/ldp_energy/2018-04-01.parquet"
+    r"Y:\IDEAL\preprocess\sens=1500\ldp_energy\2018-04-01.parquet"
 )
 df
 

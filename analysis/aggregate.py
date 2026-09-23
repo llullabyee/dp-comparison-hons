@@ -2,6 +2,7 @@ import concurrent.futures
 import time
 from functools import reduce
 from pathlib import Path
+import pandas as pd
 
 import numpy as np
 import pyarrow as pa
@@ -30,11 +31,13 @@ epsilon = params["epsilon"]
 window_size = params["window_size"]
 domain_max = params["domain_max"]
 
-boundary_list = build_boundary_list(epsilon, domain_max)
+# boundary_list = build_boundary_list(epsilon, domain_max)
+boundary_list = np.linspace(0, domain_max, 10 + 1)
 num_boundaries = len(boundary_list)
 
 preprocess_mains = PREPROCESS_MAINS_DIR
-preprocess_apps = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
+# preprocess_apps = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
+preprocess_apps = PREPROCESS_DIR / f"sens={domain_max:g}"
 
 home_ids = sorted(
     {p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")}
@@ -75,7 +78,9 @@ def raw_aggregate(home_ids, day, directory, col_name):
         tbl = tbl.rename_columns(["timestamp", home_id])
         joined = joined.join(tbl, keys="timestamp", join_type="full outer")
     joined = joined.sort_by("timestamp")
-    home_cols = [c for c in joined.column_names if c != "timestamp"]
+    timestamps = joined.column("timestamp")
+    joined = joined.drop_columns("timestamp")
+    home_cols = [c for c in joined.column_names]
     values = np.column_stack(
         [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
     )
@@ -85,7 +90,10 @@ def raw_aggregate(home_ids, day, directory, col_name):
     counts, _, _, _ = true_aggregate(
         values, epsilon, boundary_list.size, boundary_list
     )
-    return counts
+    counts = pd.DataFrame(counts, columns=boundary_list)
+    tbl = pa.Table.from_pandas(counts)
+    tbl = tbl.add_column(0, "timestamp", timestamps)
+    return tbl
 
 
 def aggregation_counts(home_ids, day, directory):
@@ -103,23 +111,31 @@ def aggregation_counts(home_ids, day, directory):
         if not fp.exists():
             continue
         tbl = pq.read_table(fp)
+        column_names = tbl.column_names
+
         new_names = [
             f"{home_id}_{name}" if name != "timestamp" else name
-            for name in tbl.column_names
+            for name in column_names
         ]
         tbl = tbl.rename_columns(new_names)
+        del column_names[0]
         joined = joined.join(tbl, keys="timestamp", join_type="full outer")
         loaded_home_ids.append(home_id)
     joined = joined.sort_by("timestamp")
+    timestamps = joined.column("timestamp")
+    joined = joined.drop_columns("timestamp")
     num_timestamps = joined.num_rows
     num_users = len(loaded_home_ids)
-    home_cols = [c for c in joined.column_names if c != "timestamp"]
+    home_cols = [c for c in joined.column_names]
     values = np.column_stack(
         [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
     )
     values = np.nan_to_num(values, nan=0.0, copy=False)
     values = values.reshape(num_timestamps, num_users, num_appliances)
-    return np.sum(values, axis=1)
+    values = pd.DataFrame(np.sum(values, axis=1), columns=column_names)
+    tbl = pa.Table.from_pandas(values)
+    tbl = tbl.add_column(0, "timestamp", timestamps)
+    return tbl
 
 
 def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_energy_dir):
@@ -184,13 +200,20 @@ def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_energy_dir):
                     ["timestamp"] + [f"{c}_{i}" for c in value_cols]
                 )
             )
-            col_groups.append([f"{c}_{i}" for c in value_cols])
+            col_groups.append([f"{c}_{i}" for c in value_cols if c != "epsilon"])
         joined = reduce(
             lambda l, r: l.join(r, keys="timestamp", join_type="full outer"),
             mech_tables,
         ).sort_by("timestamp")
-        del raw_tables, mech_tables
+        epsilon_table = joined.select([c for c in joined.column_names if c.startswith("epsilon_")])
+        epsilons = np.column_stack([epsilon_table.column(c).to_numpy(zero_copy_only=False) for c in epsilon_table.column_names])
+        epsilons = np.where(epsilons == None, 0, epsilons).astype(float)
+
+        joined = joined.drop_columns([c for c in joined.column_names if c.startswith("epsilon_")])
+
+        del raw_tables, mech_tables, epsilon_table
         timestamps = joined.column("timestamp")
+
         joined = joined.drop_columns("timestamp")
         joined = pa.table(
             {
@@ -209,7 +232,7 @@ def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_energy_dir):
         mech_arrs = np.hstack(mech_arrs)
         mech_arrs = mech_arrs.reshape(mech_arrs.shape[0], len(col_groups), -1)
 
-        aggregated_perturbed_values = ldp_aggregate(mech_arrs, epsilon)
+        aggregated_perturbed_values, eps_arrs = ldp_aggregate(mech_arrs, np.array(epsilons))
         del mech_arrs
         appliance_names = [c.rsplit("_", 1)[0] for c in col_groups[0]]
 
@@ -220,6 +243,7 @@ def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_energy_dir):
                     name: aggregated_perturbed_values[:, j]
                     for j, name in enumerate(appliance_names)
                 },
+                "epsilon": eps_arrs,
             }
         )
         del aggregated_perturbed_values
@@ -247,14 +271,10 @@ def _run_day(
     preprocess_aggregate_ldp_fp = (
         preprocess_aggregate_ldp_dir / f"{day}.parquet"
     )
-    preprocess_main_ready = preprocess_aggregate_gai_dir.exists() and any(
-        preprocess_aggregate_gai_dir.iterdir()
-    )
-    preprocess_app_ready = preprocess_aggregate_ldp_dir.exists() and any(
-        preprocess_aggregate_ldp_dir.iterdir()
-    )
-    gai_ready = gai_dir.exists() and any(gai_dir.iterdir())
-    ldp_ready = ldp_energy_dir.exists() and any(ldp_energy_dir.iterdir())
+    preprocess_main_ready = preprocess_aggregate_gai_dir.exists() and (len(list(preprocess_aggregate_gai_dir.glob("*.parquet"))) == 30)
+    preprocess_app_ready = preprocess_aggregate_ldp_dir.exists() and (len(list(preprocess_aggregate_ldp_dir.glob("*.parquet"))) == 30)
+    gai_ready = gai_dir.exists() and (len(list(gai_dir.glob("*.parquet"))) == 30)
+    ldp_ready = ldp_energy_dir.exists() and (len(list(ldp_energy_dir.glob("*.parquet"))) == 120)
 
     if not preprocess_main_ready:
         print(f"[{day}] raw_aggregate (mains)...")
@@ -263,6 +283,7 @@ def _run_day(
         )
         print(f"[{day}] writing aggregate parquet preprocess mains file...")
         pq.write_table(mains_agg_tbl, preprocess_aggregate_gai_fp)
+        del mains_agg_tbl
     else:
         print(f"[{day}] raw_aggregate (mains) already exists. Skipping...")
 
@@ -271,6 +292,7 @@ def _run_day(
         apps_agg_tbl = aggregation_counts(home_ids, day, preprocess_apps)
         print(f"[{day}] writing aggregate parquet preprocess apps file...")
         pq.write_table(apps_agg_tbl, preprocess_aggregate_ldp_fp)
+        del apps_agg_tbl
     else:
         print(
             f"[{day}] aggregation_counts (appliances) already exists. Skipping..."
@@ -290,8 +312,8 @@ def _run_day(
     return day, elapsed
 
 
-def main(home_ids, max_workers=4, use_processes=True):
-    preprocess_aggregate_gai_dir = preprocess_apps / "gai"
+def main(home_ids, max_workers=2, use_processes=True):
+    preprocess_aggregate_gai_dir = preprocess_mains / "gai"
     preprocess_aggregate_ldp_dir = preprocess_apps / "ldp_energy"
     preprocess_aggregate_gai_dir.mkdir(parents=True, exist_ok=True)
     preprocess_aggregate_ldp_dir.mkdir(parents=True, exist_ok=True)

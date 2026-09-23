@@ -200,13 +200,20 @@ def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_energy_dir):
                     ["timestamp"] + [f"{c}_{i}" for c in value_cols]
                 )
             )
-            col_groups.append([f"{c}_{i}" for c in value_cols])
+            col_groups.append([f"{c}_{i}" for c in value_cols if c != "epsilon"])
         joined = reduce(
             lambda l, r: l.join(r, keys="timestamp", join_type="full outer"),
             mech_tables,
         ).sort_by("timestamp")
-        del raw_tables, mech_tables
+        epsilon_table = joined.select([c for c in joined.column_names if c.startswith("epsilon_")])
+        epsilons = np.column_stack([epsilon_table.column(c).to_numpy(zero_copy_only=False) for c in epsilon_table.column_names])
+        epsilons = np.where(epsilons == None, 0, epsilons).astype(float)
+
+        joined = joined.drop_columns([c for c in joined.column_names if c.startswith("epsilon_")])
+
+        del raw_tables, mech_tables, epsilon_table
         timestamps = joined.column("timestamp")
+
         joined = joined.drop_columns("timestamp")
         joined = pa.table(
             {
@@ -225,7 +232,7 @@ def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_energy_dir):
         mech_arrs = np.hstack(mech_arrs)
         mech_arrs = mech_arrs.reshape(mech_arrs.shape[0], len(col_groups), -1)
 
-        aggregated_perturbed_values = ldp_aggregate(mech_arrs, epsilon)
+        aggregated_perturbed_values, eps_arrs = ldp_aggregate(mech_arrs, np.array(epsilons))
         del mech_arrs
         appliance_names = [c.rsplit("_", 1)[0] for c in col_groups[0]]
 
@@ -236,6 +243,7 @@ def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_energy_dir):
                     name: aggregated_perturbed_values[:, j]
                     for j, name in enumerate(appliance_names)
                 },
+                "epsilon": eps_arrs,
             }
         )
         del aggregated_perturbed_values

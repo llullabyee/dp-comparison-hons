@@ -2,7 +2,7 @@ from collections import deque
 
 import numpy as np
 import pyarrow as pa
-
+import pandas as pd
 from src.utils.appliance_map import ApplianceList
 
 
@@ -123,44 +123,25 @@ def ldp_probability(epsilon):
     return q_prob
 
 
-def ldp_energy_randomise(
-    binary_vector: np.ndarray, epsilon_arr: float | np.ndarray
-) -> np.ndarray:
-    is_2d = binary_vector.ndim == 2
-    bv = binary_vector if is_2d else binary_vector[:, None]
-    n = bv.shape[0]
+def ldp_budget_uniform(binary_vector: np.ndarray, epsilon: float, window_size: int) -> np.ndarray:
+    n = binary_vector.shape[0]
+    actual_eps = epsilon / window_size
+    epsilon_arr = np.full(n, actual_eps, dtype=np.float64)
+    return epsilon_arr[:, None]
 
-    if not isinstance(epsilon_arr, np.ndarray):
-        epsilon_col = np.full((n, 1), epsilon_arr, dtype=object)
-    else:
-        epsilon_col = epsilon_arr.reshape(n, 1)
+# def ldp_energy_randomise_lbu_lsp(
+#     binary_vector: np.ndarray, epsilon: np.ndarray
+# ) -> np.ndarray:
+#     p_prob = 0.5
+#     q_prob = ldp_probability(epsilon)
+#     rand = np.random.random((binary_vector.shape[0], binary_vector.shape[1]))
 
-    sampled_mask = (epsilon_col != None).ravel()
-
-    output = np.empty(bv.shape, dtype=np.int8)
-
-    sampled_epsilon = epsilon_col[sampled_mask].astype(
-        float
-    )  # (k,1) — broadcasts over columns
-    q_prob = ldp_probability(sampled_epsilon)  # (k,1)
-    rand = np.random.random((sampled_epsilon.shape[0], bv.shape[1]))
-    sampled_bits = bv[sampled_mask]  # (k,m)
-
-    output[sampled_mask] = np.where(
-        sampled_bits == 1,
-        rand < 0.5,
-        rand < q_prob,
-    ).astype(np.int8)
-
-    last_idx = np.where(sampled_mask, np.arange(n), 0)
-    np.maximum.accumulate(last_idx, out=last_idx)
-    output = output[last_idx]
-
-    return output if is_2d else output.ravel()
-
-
-def ldp_budget_uniform(epsilon: float, window_size: int) -> float:
-    return epsilon / window_size
+#     perturbed = np.where(
+#         binary_vector == 1,
+#         rand < p_prob,
+#         rand < q_prob,
+#     ).astype(np.int8)
+#     return perturbed
 
 
 def ldp_sampling_method(
@@ -176,6 +157,48 @@ def ldp_sampling_method(
     return epsilon_arr[:, None], new_excess
 
 
+def ldp_energy_randomise_lbu_lsp(
+    binary_vector: np.ndarray, epsilon_arr: np.ndarray
+) -> np.ndarray:
+    p_prob = 0.5
+    n = binary_vector.shape[0]
+    epsilon_col = epsilon_arr.reshape(n, 1)
+
+    sampled_mask = (epsilon_col != None).ravel()
+
+    output = np.empty(binary_vector.shape, dtype=np.int8)
+
+    sampled_epsilon = epsilon_col[sampled_mask].astype(float)  # (k,1) — broadcasts over columns
+    q_prob = ldp_probability(sampled_epsilon)  # (k,1)
+    rand = np.random.random((sampled_epsilon.shape[0], binary_vector.shape[1]))
+    sampled_bits = binary_vector[sampled_mask]  # (k,m)
+
+    output[sampled_mask] = np.where(
+        sampled_bits == 1,
+        rand < p_prob,
+        rand < q_prob,
+    ).astype(np.int8)
+
+    last_idx = np.where(sampled_mask, np.arange(n), 0)
+    np.maximum.accumulate(last_idx, out=last_idx)
+    output = output[last_idx]
+
+    return output
+
+
+def ldp_energy_randomise_lba_lbd(
+    binary_vector: np.ndarray, epsilon: float | np.ndarray
+) -> np.ndarray:
+    p_prob = 0.5
+    q_prob = ldp_probability(epsilon)
+    rand = np.random.random(binary_vector.shape)
+    return np.where(
+        binary_vector == 1,
+        rand < p_prob,
+        rand < q_prob,
+    ).astype(np.int8)
+
+
 def ldp_budget_distribution(
     binary_vector: np.ndarray,
     epsilon: float,
@@ -189,7 +212,7 @@ def ldp_budget_distribution(
         last_published_release = np.zeros(binary_vector.shape[1], dtype=np.int8)
     eps_t1 = epsilon / (2 * window_size)
 
-    perturbed_t1_all = ldp_energy_randomise(
+    perturbed_t1_all = ldp_energy_randomise_lba_lbd(
         binary_vector, eps_t1
     )  # vectorised for efficiency
 
@@ -201,7 +224,7 @@ def ldp_budget_distribution(
         )
         # %% Mechanism 2
         eps_t2 = ((epsilon / 2) - sum(budget_spent)) / 2
-        perturbed_row_t2 = ldp_energy_randomise(row, eps_t2)
+        perturbed_row_t2 = ldp_energy_randomise_lba_lbd(row, eps_t2)
         error = np.mean((perturbed_row_t2 - row) ** 2)
         # %% Mechanism 3
         if dissimilarity > error:
@@ -234,7 +257,7 @@ def ldp_budget_absorption(
     releases = []
     budget_spent_arr = []
     eps_t1 = epsilon / (2 * window_size)
-    perturbed_t1_all = ldp_energy_randomise(
+    perturbed_t1_all = ldp_energy_randomise_lba_lbd(
         binary_vector, eps_t1
     )  # vectorised for efficiency
 
@@ -256,7 +279,7 @@ def ldp_budget_absorption(
                 last_published_idx + nullification_count
             )
             eps_t2 = eps_t1 * min(absorption_count, window_size)
-            perturbed_row_t2 = ldp_energy_randomise(row, eps_t2)
+            perturbed_row_t2 = ldp_energy_randomise_lba_lbd(row, eps_t2)
             error = np.mean((perturbed_row_t2 - row) ** 2)
             # %% Mechanism 3
             if dissimilarity > error:
@@ -302,15 +325,15 @@ def ldp_energy_mechanism(
 
     match mechanism:
         case "LBU":
-            eps = ldp_budget_uniform(epsilon, window_size)
-            perturbed = ldp_energy_randomise(bin_vector_arr, eps)
+            epsilon_arr = ldp_budget_uniform(bin_vector_arr, epsilon, window_size)
+            perturbed = ldp_energy_randomise_lbu_lsp(bin_vector_arr, epsilon_arr)
         case "LSP":
             epsilon_arr, excess = ldp_sampling_method(
                 bin_vector_arr, epsilon, window_size, excess
             )
-            perturbed = ldp_energy_randomise(bin_vector_arr, epsilon_arr)
+            perturbed = ldp_energy_randomise_lbu_lsp(bin_vector_arr, epsilon_arr)
         case "LBD":
-            perturbed, budget_spent_arr, last_published_release = (
+            perturbed, epsilon_arr, last_published_release = (
                 ldp_budget_distribution(
                     bin_vector_arr, epsilon, window_size, budget_spent
                 )
@@ -318,7 +341,7 @@ def ldp_energy_mechanism(
         case "LBA":
             (
                 perturbed,
-                budget_spent_arr,
+                epsilon_arr,
                 last_published_idx,
                 last_published_epsilon,
                 last_published_release,
@@ -341,23 +364,35 @@ def ldp_energy_mechanism(
             **{
                 name: perturbed[:, i] for i, name in enumerate(tbl.column_names)
             },
+            "epsilon": epsilon_arr.ravel(),
         }
     )
     return (
         perturbed_tbl,
         last_published_idx,
         last_published_epsilon,
-        budget_spent,
         last_published_release,
         global_idx,
         excess,
     )
 
 
-def ldp_aggregate(tables: np.ndarray, epsilon: float):
+# def ldp_aggregate(tables: np.ndarray, epsilon: float):
+#     q_prob = ldp_probability(epsilon)
+#     mask = tables != -1 & (~np.isnan(tables))
+#     n_reports = mask.sum(axis=1)  # (t, m) — users reporting, per appliance
+#     sums = np.where(mask, tables, 0).sum(axis=1)  # (t, m)
+#     aggregated_perturbed_values = (sums - n_reports * q_prob) / (0.5 - q_prob)
+#     return aggregated_perturbed_values  # (t, m)
+
+
+def ldp_aggregate(tables: np.ndarray, epsilon_vals: np.ndarray):
+    epsilon = np.max(epsilon_vals, axis=1)
+    epsilon = pd.Series(epsilon).replace(0, np.nan).ffill().to_numpy()[:, None]
     q_prob = ldp_probability(epsilon)
-    mask = tables != -1 & (~np.isnan(tables))
+    mask = (tables != -1)
     n_reports = mask.sum(axis=1)  # (t, m) — users reporting, per appliance
     sums = np.where(mask, tables, 0).sum(axis=1)  # (t, m)
     aggregated_perturbed_values = (sums - n_reports * q_prob) / (0.5 - q_prob)
-    return aggregated_perturbed_values  # (t, m)
+    aggregated_perturbed_values[np.isnan(aggregated_perturbed_values)] = 0
+    return aggregated_perturbed_values, epsilon.squeeze()  # (t, m)

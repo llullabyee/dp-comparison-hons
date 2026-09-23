@@ -120,7 +120,6 @@ def process_home(home_id):
                 ldp_noise,
                 state["last_published_idx"],
                 state["last_published_epsilon"],
-                state["budget_spent"],
                 state["last_published_release"],
                 state["global_idx"],
                 state["excess"],

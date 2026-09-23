@@ -7,7 +7,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from scipy.stats import kruskal
+from scipy.stats import combine_pvalues, kruskal
 
 sys.path.insert(0, "/Users/lullaby/Projects/University/dp-comparison-hons")
 
@@ -66,7 +66,6 @@ def test_energy_randomise(
 
 # %%
 
-
 epsilon = 10
 domain_max = 76000  # ~95th percentile value from one of the homes. Determined by pasting into claude and asking it to determine it lowkey.
 num_subintervals = 10
@@ -93,8 +92,10 @@ days = sorted(
 )
 
 # %%
-perturbed = {}
+# --- cache pre-perturbation values (deterministic, only needs computing once) ---
+pre_perturbation = {}
 true_vals = {}
+
 for home_id in home_ids:
     data = {}
     for day in days:
@@ -116,30 +117,15 @@ for home_id in home_ids:
     values = ldp_energy_encode_vectorise(values, num_levels, num_rows)
     true_vals[home_id] = values.add_column(0, "day", result.column("day"))
 
-    # %%
-    arr = values.to_pandas().to_numpy()
-    lbu_eps = epsilon / window_size
-    arr = ldp_energy_randomise(arr, lbu_eps)
-    values = pa.table(
-        {name: arr[:, i] for i, name in enumerate(values.column_names)}
-    )
-    values = values.add_column(0, "day", result.column("day"))
-    perturbed[home_id] = values
-
+    # store pre-perturbation array + column names + day column, reused each trial
+    pre_perturbation[home_id] = {
+        "arr": values.to_pandas().to_numpy(),
+        "columns": values.column_names,
+        "day": result.column("day"),
+    }
 
 # %%
-perturbed_dfs = []
-for home_id, tbl in perturbed.items():
-    df = tbl.to_pandas()
-    df = df.rename(
-        columns={c: f"{home_id}_{c}" for c in tbl.column_names if c != "day"}
-    )
-    perturbed_dfs.append(df.set_index("day"))
-
-perturbed_df = pd.concat(perturbed_dfs, axis=1, join="outer").reset_index()
-perturbed_df = perturbed_df.fillna(-1)
-perturbed_arr = perturbed_df.drop(columns=["day"]).to_numpy()
-
+# --- build true_arr once (unchanged across trials) ---
 true_dfs = []
 for home_id, tbl in true_vals.items():
     df = tbl.to_pandas()
@@ -152,39 +138,78 @@ true_df = pd.concat(true_dfs, axis=1, join="outer").reset_index()
 true_df = true_df.fillna(-1)
 true_arr = true_df.drop(columns=["day"]).to_numpy()
 
-perturbed_arr
-
-# %%
-n_homes = len(perturbed)
-m = len(next(iter(perturbed.values())).column_names) - 1
-
+n_homes = len(pre_perturbation)
+m = len(next(iter(pre_perturbation.values()))["columns"])
 eps = epsilon / window_size
-perturbed_agg = ldp_aggregate(perturbed_arr, eps, n_homes, m)
+
 true_agg = raw_aggregate(true_arr, eps, n_homes, m)
-
-df = pd.DataFrame(perturbed_agg)
-df
-
-# %%
-trues = pd.DataFrame(true_agg)
-
-trues
-
-# %%
 true_appliance_sums = np.sum(true_agg, axis=0)
-perturbed_appliance_sums = np.sum(perturbed_agg, axis=0)
-
-true_appliance_sums
-# %%
-perturbed_appliance_sums
 
 # %%
-val_mae = mae(true_agg, perturbed_agg)
+# --- run n_trials trials, re-randomising perturbation each time ---
+n_trials = 30
+stats = []
+pvals = []
+maes = []
 
-val_mae
+for trial in range(n_trials):
+    perturbed = {}
+    for home_id, cached in pre_perturbation.items():
+        arr = ldp_energy_randomise(cached["arr"].copy(), eps)
+        values = pa.table(
+            {name: arr[:, i] for i, name in enumerate(cached["columns"])}
+        )
+        values = values.add_column(0, "day", cached["day"])
+        perturbed[home_id] = values
+
+    perturbed_dfs = []
+    for home_id, tbl in perturbed.items():
+        df = tbl.to_pandas()
+        df = df.rename(
+            columns={
+                c: f"{home_id}_{c}" for c in tbl.column_names if c != "day"
+            }
+        )
+        perturbed_dfs.append(df.set_index("day"))
+
+    perturbed_df = pd.concat(perturbed_dfs, axis=1, join="outer").reset_index()
+    perturbed_df = perturbed_df.fillna(-1)
+    perturbed_arr = perturbed_df.drop(columns=["day"]).to_numpy()
+
+    perturbed_agg = ldp_aggregate(perturbed_arr, eps, n_homes, m)
+    perturbed_appliance_sums = np.sum(perturbed_agg, axis=0)
+
+    stat, p = kruskal(
+        true_appliance_sums.flatten(), perturbed_appliance_sums.flatten()
+    )
+    stats.append(stat)
+    pvals.append(p)
+    maes.append(mae(true_agg, perturbed_agg))
+
+stats = np.array(stats)
+pvals = np.array(pvals)
+maes = np.array(maes)
 
 # %%
-stat, p = kruskal(
-    true_appliance_sums.flatten(), perturbed_appliance_sums.flatten()
+# --- summary ---
+print(f"n_trials = {n_trials}")
+print(
+    f"H:   mean={stats.mean():.4f}, std={stats.std():.4f}, "
+    f"min={stats.min():.4f}, max={stats.max():.4f}"
 )
-stat, p
+print(
+    f"p:   mean={pvals.mean():.6g}, std={pvals.std():.6g}, "
+    f"median={np.median(pvals):.6g}"
+)
+print(f"MAE: mean={maes.mean():.4f}, std={maes.std():.4f}")
+
+# Fisher's method to combine independent p-values into a single test
+combined_stat, combined_p = combine_pvalues(pvals, method="fisher")
+print(f"\nFisher combined statistic: {combined_stat:.4f}")
+print(f"Fisher combined p-value:   {combined_p:.6g}")
+
+# %%
+results_df = pd.DataFrame(
+    {"trial": range(n_trials), "H": stats, "p": pvals, "mae": maes}
+)
+results_df

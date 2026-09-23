@@ -195,6 +195,7 @@ def main():
     epsilon = params["epsilon"]
     window_size = params["window_size"]
     domain_max = params["domain_max"]
+    drop_cols = ["timestamp", "epsilon"]
 
     preprocess_mains = PREPROCESS_MAINS_DIR
     preprocess_apps = (
@@ -284,7 +285,7 @@ def main():
                 [
                     ldp_appliance_counts_tbl[col].to_numpy()
                     for col in ldp_appliance_counts_tbl.column_names
-                    if col != "timestamp"
+                    if col not in drop_cols
                 ]
             )
             del ldp_appliance_counts_tbl

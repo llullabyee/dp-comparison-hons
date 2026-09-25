@@ -35,11 +35,20 @@ def rmse(true_values: np.ndarray, perturbed_values: np.ndarray) -> float:
     return float(rmse_val)
 
 
-def mae(true_values: np.ndarray, perturbed_values: np.ndarray) -> float:
-    """Mean Absolute Error."""
+# def mae(true_values: np.ndarray, perturbed_values: np.ndarray) -> float:
+#     """Mean Absolute Error."""
+#     abs_error = np.abs(true_values - perturbed_values)
+#     mae_val = np.mean(abs_error)
+#     return float(mae_val)
+
+
+def mae(
+    true_values: np.ndarray, perturbed_values: np.ndarray
+) -> tuple[float, int]:
     abs_error = np.abs(true_values - perturbed_values)
-    mae_val = np.mean(abs_error)
-    return float(mae_val)
+    n_valid = np.sum(~np.isnan(abs_error))
+    mae_val = np.nanmean(abs_error)
+    return float(mae_val), int(n_valid)
 
 
 def kruskal_wallis(true_values: np.ndarray, perturbed_values: np.ndarray):

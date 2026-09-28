@@ -14,17 +14,10 @@ def make_run_dir(epsilon, window_size, peak, domain_max):
         / f"peak={peak:g}"
         / f"sens={domain_max:g}"
     )
-    mains_dir = run_dir / "main"
+    mains_dir = run_dir / "mains"
     apps_dir = run_dir / "appliances"
+    bin_main_dir = run_dir / "binary_mains"
     gai_dir = run_dir / "gai_agg"
-    ldp_energy_dir = run_dir / "ldp_energy_agg"
-    return run_dir, mains_dir, apps_dir, gai_dir, ldp_energy_dir
-
-
-# def load_data(directory: str|Path) -> tuple[pd.DataFrame, str, str]:
-#     for fp in sorted(Path(directory).glob('*.parquet')):
-#         yield pd.read_parquet(fp), fp.stem, fp.name
-
-
-def load_data(fp: Path) -> pa.Table:
-    return pq.read_table(fp)
+    ldp_apps_dir = run_dir / "ldp_appliances_agg"
+    ldp_mains_dir = run_dir / "ldp_mains_agg"
+    return run_dir, mains_dir, apps_dir, bin_main_dir, gai_dir, ldp_apps_dir, ldp_mains_dir

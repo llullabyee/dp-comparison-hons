@@ -1,16 +1,14 @@
 from collections import deque
+from enum import Enum
 
 import numpy as np
-import pyarrow as pa
 import pandas as pd
-from src.utils.appliance_map import ApplianceList
+import pyarrow as pa
 
 
 def return_bounds_snap(column, intervals, interval_size):
     """Always assigns to the interval [intervals[idx-1], intervals[idx]],
     even for values landing exactly on a boundary — no zero-width exact case.
-    Exception: a value of 0 is always mapped to (0, 0), overriding the
-    'first level' assumption noted below.
     """
     column = np.asarray(column, dtype=float)
     idx = np.searchsorted(intervals, column, side="left")
@@ -20,12 +18,6 @@ def return_bounds_snap(column, intervals, interval_size):
 
     lower = intervals[idx - 1]
     upper = intervals[idx]
-
-    # value of 0 gets its own (0, 0) bucket rather than being folded into
-    # the first interval
-    is_zero = column == 0
-    lower = np.where(is_zero, 0, lower)
-    upper = np.where(is_zero, 0, upper)
 
     return lower, upper
 
@@ -44,20 +36,16 @@ def return_bounds_snap(column, intervals, interval_size):
 
 def return_levels(lower, upper, boundaries):
     """Maps (lower, upper) bound pairs back to their interval level index.
-    Exception: if both lower and upper are 0, return level 0.
     """
     lower = np.asarray(lower, dtype=float)
     upper = np.asarray(upper, dtype=float)
     idx_of_lower = np.searchsorted(boundaries, lower, side="left")
     levels = idx_of_lower + 1
-    is_zero = (lower == 0) & (upper == 0)
-    levels = np.where(is_zero, 0, levels)
-
     return levels
 
 
 def ldp_energy_discretise(
-    tbl: pa.Table, boundaries: np.ndarray
+    tbl: pa.Table, boundaries: np.ndarray, appliance_list
 ) -> tuple[pa.Table, int, int]:
     num_levels = boundaries.size - 1
     dtype = np.min_scalar_type(
@@ -65,7 +53,10 @@ def ldp_energy_discretise(
     )  # smallest uint dtype that fits num_levels
     num_rows = tbl.num_rows
 
-    appliance_names = [member.value for member in ApplianceList]
+    appliance_names = [
+        member.value if isinstance(member, Enum) else member
+        for member in appliance_list
+    ]
     common_cols = [name for name in tbl.column_names if name in appliance_names]
 
     discretised = {}
@@ -78,7 +69,7 @@ def ldp_energy_discretise(
     discretised = {
         name: discretised[name]
         if name in discretised
-        else np.full(num_rows, 0, dtype=dtype)
+        else np.full(num_rows, 1, dtype=dtype)
         for name in appliance_names
     }
 
@@ -86,13 +77,15 @@ def ldp_energy_discretise(
 
 
 def ldp_energy_encode_vectorise(
-    tbl: pa.Table, num_levels: int, num_rows: int
-) -> pa.Table:
+    tbl: pa.Table,
+    num_levels: int,
+    num_rows: int,
+) -> tuple[pa.Table, pa.Array | pa.ChunkedArray]:
     result = {}
     for column in tbl.column_names:
         levels = tbl.column(
             column
-        ).to_numpy()  # 0 = missing/not-present, 1..num_levels = valid level
+        ).to_numpy()
         one_hot = np.zeros((num_rows, num_levels), dtype=np.int8)
 
         valid = levels > 0
@@ -102,6 +95,7 @@ def ldp_energy_encode_vectorise(
 
         for level in range(num_levels):
             result[f"{column}_{level + 1}"] = one_hot[:, level]
+
     return pa.table(result)
 
 
@@ -123,11 +117,14 @@ def ldp_probability(epsilon):
     return q_prob
 
 
-def ldp_budget_uniform(binary_vector: np.ndarray, epsilon: float, window_size: int) -> np.ndarray:
+def ldp_budget_uniform(
+    binary_vector: np.ndarray, epsilon: float, window_size: int
+) -> np.ndarray:
     n = binary_vector.shape[0]
     actual_eps = epsilon / window_size
     epsilon_arr = np.full(n, actual_eps, dtype=np.float64)
     return epsilon_arr[:, None]
+
 
 # def ldp_energy_randomise_lbu_lsp(
 #     binary_vector: np.ndarray, epsilon: np.ndarray
@@ -168,7 +165,9 @@ def ldp_energy_randomise_lbu_lsp(
 
     output = np.empty(binary_vector.shape, dtype=np.int8)
 
-    sampled_epsilon = epsilon_col[sampled_mask].astype(float)  # (k,1) — broadcasts over columns
+    sampled_epsilon = epsilon_col[sampled_mask].astype(
+        float
+    )  # (k,1) — broadcasts over columns
     q_prob = ldp_probability(sampled_epsilon)  # (k,1)
     rand = np.random.random((sampled_epsilon.shape[0], binary_vector.shape[1]))
     sampled_bits = binary_vector[sampled_mask]  # (k,m)
@@ -314,24 +313,27 @@ def ldp_energy_mechanism(
     global_idx: int = 0,
     excess: int = 0,
 ):
-    if "timestamp" in tbl.column_names:
-        timestamp = tbl.column("timestamp")
-        tbl = tbl.drop_columns(["timestamp"])
-    else:
-        timestamp = None
+    timestamp = tbl.column("timestamp")
+    tbl = tbl.drop_columns(["timestamp"])
     bin_vector_arr = np.column_stack(
         [tbl.column(name).to_numpy() for name in tbl.column_names]
     )
 
     match mechanism:
         case "LBU":
-            epsilon_arr = ldp_budget_uniform(bin_vector_arr, epsilon, window_size)
-            perturbed = ldp_energy_randomise_lbu_lsp(bin_vector_arr, epsilon_arr)
+            epsilon_arr = ldp_budget_uniform(
+                bin_vector_arr, epsilon, window_size
+            )
+            perturbed = ldp_energy_randomise_lbu_lsp(
+                bin_vector_arr, epsilon_arr
+            )
         case "LSP":
             epsilon_arr, excess = ldp_sampling_method(
                 bin_vector_arr, epsilon, window_size, excess
             )
-            perturbed = ldp_energy_randomise_lbu_lsp(bin_vector_arr, epsilon_arr)
+            perturbed = ldp_energy_randomise_lbu_lsp(
+                bin_vector_arr, epsilon_arr
+            )
         case "LBD":
             perturbed, epsilon_arr, last_published_release = (
                 ldp_budget_distribution(
@@ -386,13 +388,15 @@ def ldp_energy_mechanism(
 #     return aggregated_perturbed_values  # (t, m)
 
 
-def ldp_aggregate(tables: np.ndarray, epsilon_vals: np.ndarray):
-    epsilon = np.max(epsilon_vals, axis=1)
+def ldp_aggregate(tables: np.ndarray, epsilon_vals: np.ndarray, n_homes, n_bins):
+    epsilon = np.nanmax(epsilon_vals, axis=1)
     epsilon = pd.Series(epsilon).replace(0, np.nan).ffill().to_numpy()[:, None]
     q_prob = ldp_probability(epsilon)
-    mask = (tables != -1)
-    n_reports = mask.sum(axis=1)  # (t, m) — users reporting, per appliance
-    sums = np.where(mask, tables, 0).sum(axis=1)  # (t, m)
-    aggregated_perturbed_values = (sums - n_reports * q_prob) / (0.5 - q_prob)
-    aggregated_perturbed_values[np.isnan(aggregated_perturbed_values)] = 0
-    return aggregated_perturbed_values, epsilon.squeeze()  # (t, m)
+    agg_test_perturbed_arr = tables.reshape(
+        tables.shape[0], n_homes, n_bins
+    ) # input is (t, n*d*m), output is (t, n, d*m)
+    reporting_mask = ~np.isnan(agg_test_perturbed_arr)
+    n_reports = reporting_mask.sum(axis=1)  # (t, d*m) — users reporting, per appliance
+    perturbed_sums = np.nansum(agg_test_perturbed_arr, axis=1)  # (t, d*m)
+    aggregated_perturbed_values = (perturbed_sums - n_reports * q_prob) / (0.5 - q_prob)
+    return aggregated_perturbed_values, epsilon.squeeze()  # (t, d*m)

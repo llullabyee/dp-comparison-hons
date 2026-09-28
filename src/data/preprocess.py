@@ -15,8 +15,11 @@ import pyarrow.compute as pc
 import pyarrow.csv as pv
 import pyarrow.parquet as pq
 
-from src.mechanisms.gai import build_boundary_list
-from src.mechanisms.ldp_energy import ldp_energy_discretise, ldp_energy_encode_vectorise
+from src.mechanisms.ldp_energy import (
+    ldp_energy_discretise,
+    ldp_energy_encode_vectorise,
+)
+from src.utils.appliance_map import ApplianceList
 from src.utils.config import (
     APPLIANCES_DIR,
     MAINS_DIR,
@@ -37,11 +40,17 @@ _CONV_OPTS = pv.ConvertOptions(
 params = load_params()
 epsilon = params["epsilon"]
 domain_max = params["domain_max"]
+boundary_list = np.linspace(
+    0, domain_max, 10 + 1
+)  # 10 is number of intervals
 
 # %% directory creation
 mains_dir = PREPROCESS_MAINS_DIR
 # apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
-apps_dir = PREPROCESS_DIR / f"sens={domain_max:g}"
+apps_dir = PREPROCESS_DIR / f"sens={domain_max:g}" / "appliances"
+bin_mains_dir = PREPROCESS_DIR / f"sens={domain_max:g}" / "mains"
+
+
 
 
 # --- stage 1: per-household mains/appliance merge -------------------------
@@ -105,7 +114,9 @@ def _process_home(file, start_ts, end_ts, appliances_dir, out_dir):
         day_tbl = day_tbl.drop_columns(["day"])
         out_fp = out_dir / f"{home_id}_{day}.parquet"
         pq.write_table(day_tbl, out_fp, compression="snappy")
-        print(f"table written to {out_fp}")
+        print(f"Mains table written to {out_fp}")
+
+
 
 
 def preprocess_data(start_ts, end_ts, max_workers=16):
@@ -124,30 +135,52 @@ def preprocess_data(start_ts, end_ts, max_workers=16):
 # --- stage 2: per-household-day discretise + encode ------------------------
 
 
-def _process_binary_file(file, boundary_list, out_dir):
+def _process_binary_file(file, boundary_list, out_dir, bin_out_dir):
     tbl = pq.read_table(file)
     timestamps = tbl.column("timestamp")
-    dropped = tbl.drop_columns(["timestamp"])
-    values = pa.table(
-        {name: pc.fill_null(dropped.column(name), 0) for name in dropped.column_names}
+    mains_readings = tbl.select(["mains"])
+    mains_tbl, mains_levels, mains_rows = ldp_energy_discretise(mains_readings, boundary_list, appliance_list=["mains"])
+    mains_tbl = ldp_energy_encode_vectorise(
+        mains_tbl, mains_levels, mains_rows
     )
-    values, num_levels, num_rows = ldp_energy_discretise(values, boundary_list)
-    values = ldp_energy_encode_vectorise(values, num_levels, num_rows)
+    mains_tbl = mains_tbl.add_column(0, "timestamp", timestamps)
+    if mains_tbl.num_rows > 0:
+        pq.write_table(mains_tbl, bin_out_dir / file.name, compression="snappy")
+        print(f"Binary Mains: {file.name}: {mains_tbl.num_columns - 1} bit columns -> {bin_out_dir}")
+    else:
+        print(f"Binary Mains {file.name} skipped - 0 valid rows.")
 
-    out = pa.table(
+    dropped = tbl.drop_columns(["timestamp", "mains"])
+    del tbl
+    null_masks = [pc.is_null(dropped.column(name)) for name in dropped.column_names]
+    all_null = null_masks[0]
+    for m in null_masks[1:]:
+        all_null = pc.and_(all_null, m)
+    keep_mask = pc.invert(all_null)
+    dropped = dropped.filter(keep_mask)
+    timestamps = timestamps.filter(keep_mask)
+    dropped = pa.table(
         {
-            "timestamp": timestamps,
-            **{name: values.column(name) for name in values.column_names},
+            name: pc.fill_null(dropped.column(name), 0)
+            for name in dropped.column_names
         }
     )
-    pq.write_table(out, out_dir / file.name, compression="snappy")
-    print(f"{file.name}: {out.num_columns - 1} bit columns -> {out_dir}")
+    apps_tbl, num_levels, num_rows = ldp_energy_discretise(dropped, boundary_list, appliance_list=ApplianceList)
+    apps_tbl = ldp_energy_encode_vectorise(
+        apps_tbl, num_levels, num_rows
+    )
+    apps_tbl = apps_tbl.add_column(0, "timestamp", timestamps)
+    if apps_tbl.num_rows > 0:
+        pq.write_table(apps_tbl, out_dir / file.name, compression="snappy")
+        print(f"Binary Apps: {file.name}: {apps_tbl.num_columns - 1} bit columns -> {out_dir}")
+    else:
+        print(f"Binary Apps {file.name} skipped - 0 valid rows.")
 
 
 def preprocess_binary_vector(boundary_list: np.ndarray, max_workers=16):
     files = list(mains_dir.iterdir())
     worker = partial(
-        _process_binary_file, boundary_list=boundary_list, out_dir=apps_dir
+        _process_binary_file, boundary_list=boundary_list, out_dir=apps_dir, bin_out_dir=bin_mains_dir
     )
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
         list(ex.map(worker, files))
@@ -156,19 +189,20 @@ def preprocess_binary_vector(boundary_list: np.ndarray, max_workers=16):
 def main(max_workers=12):
     mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
     apps_ready = apps_dir.exists() and any(apps_dir.iterdir())
-    if apps_ready:
-        return
 
     mains_dir.mkdir(parents=True, exist_ok=True)
     apps_dir.mkdir(parents=True, exist_ok=True)
+    bin_mains_dir.mkdir(parents=True, exist_ok=True)
 
     if not mains_ready:
         preprocess_data(
-            start_ts=START_TIMESTAMP, end_ts=END_TIMESTAMP, max_workers=max_workers
+            start_ts=START_TIMESTAMP,
+            end_ts=END_TIMESTAMP,
+            max_workers=max_workers,
         )
-
+    if apps_ready:
+        return
     # boundary_list = build_boundary_list(epsilon, domain_max)
-    boundary_list = np.linspace(0, domain_max, 10 + 1) # 10 is number of intervals
     preprocess_binary_vector(boundary_list, max_workers=max_workers)
 
 

@@ -8,9 +8,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.utils.appliance_map import ApplianceList
-
-sys.path.insert(0, "/Users/lullaby/Projects/University/dp-comparison-hons")
+sys.path.insert(0, r"C:\Users\lullaby\Documents\dp-comparison-hons")
 
 from analysis.utility import mae
 from src.mechanisms.ldp_energy import (
@@ -18,11 +16,12 @@ from src.mechanisms.ldp_energy import (
     return_bounds_snap,
     return_levels,
 )
+from src.utils.appliance_map import ApplianceList
 from src.utils.config import PREPROCESS_DIR, PREPROCESS_MAINS_DIR
 
 # %% variable creation
 mechanism = "LBU"
-epsilon = 1.0
+epsilon = 10
 domain_max = 1500
 num_subintervals = 10
 window_size = 3
@@ -143,18 +142,34 @@ def test_budget_uniform(
 
 
 def test_energy_randomise(
-    binary_vector: np.ndarray, epsilon: np.ndarray
+    binary_vector: np.ndarray, epsilon_arr: np.ndarray
 ) -> np.ndarray:
     p_prob = 0.5
-    q_prob = ldp_probability(epsilon)
-    rand = np.random.random((binary_vector.shape[0], binary_vector.shape[1]))
+    n = binary_vector.shape[0]
+    epsilon_col = epsilon_arr.reshape(n, 1)
 
-    perturbed = np.where(
-        binary_vector == 1,
+    sampled_mask = (epsilon_col != None).ravel()
+
+    output = np.empty(binary_vector.shape, dtype=np.int8)
+
+    sampled_epsilon = epsilon_col[sampled_mask].astype(
+        float
+    )  # (k,1) — broadcasts over columns
+    q_prob = ldp_probability(sampled_epsilon)  # (k,1)
+    rand = np.random.random((sampled_epsilon.shape[0], binary_vector.shape[1]))
+    sampled_bits = binary_vector[sampled_mask]  # (k,m)
+
+    output[sampled_mask] = np.where(
+        sampled_bits == 1,
         rand < p_prob,
         rand < q_prob,
     ).astype(np.int8)
-    return perturbed
+
+    last_idx = np.where(sampled_mask, np.arange(n), 0)
+    np.maximum.accumulate(last_idx, out=last_idx)
+    output = output[last_idx]
+
+    return output
 
 
 # def test_raw_aggregate(tables: np.ndarray, n_homes: int, m: int):
@@ -233,7 +248,7 @@ for home_id in home_ids:
         binary_vector=binary_vector, epsilon=epsilon, window_size=window_size
     )
     perturbed = test_energy_randomise(
-        binary_vector=binary_vector, epsilon=epsilon_arr
+        binary_vector=binary_vector, epsilon_arr=epsilon_arr
     )
     perturbed_tbl = pa.table(
         {

@@ -17,21 +17,21 @@ from src.utils.config import (
 
 
 def smape(true_values: np.ndarray, perturbed_values: np.ndarray) -> float:
-    """Symmetric Mean Absolute Percentage Error."""
+    """Symmetric Mean Absolute Percentage Error, ignoring NaNs."""
     numerator = np.abs(true_values - perturbed_values)
     denominator = (np.abs(true_values) + np.abs(perturbed_values)) / 2
 
     with np.errstate(invalid="ignore", divide="ignore"):
         ratio = np.where(denominator == 0, 0, numerator / denominator)
 
-    smape_val = np.mean(ratio)
-    return smape_val
+    smape_val = np.nanmean(ratio)
+    return float(smape_val)
 
 
 def rmse(true_values: np.ndarray, perturbed_values: np.ndarray) -> float:
-    """Root Mean Squared Error."""
+    """Root Mean Squared Error, ignoring NaNs."""
     squared_error = (true_values - perturbed_values) ** 2
-    rmse_val = np.sqrt(np.mean(squared_error))
+    rmse_val = np.sqrt(np.nanmean(squared_error))
     return float(rmse_val)
 
 
@@ -42,13 +42,11 @@ def rmse(true_values: np.ndarray, perturbed_values: np.ndarray) -> float:
 #     return float(mae_val)
 
 
-def mae(
-    true_values: np.ndarray, perturbed_values: np.ndarray
-) -> tuple[float, int]:
+def mae(true_values: np.ndarray, perturbed_values: np.ndarray) -> float:
+    """Mean Absolute Error, ignoring NaNs."""
     abs_error = np.abs(true_values - perturbed_values)
-    n_valid = np.sum(~np.isnan(abs_error))
     mae_val = np.nanmean(abs_error)
-    return float(mae_val), int(n_valid)
+    return float(mae_val)
 
 
 def kruskal_wallis(true_values: np.ndarray, perturbed_values: np.ndarray):
@@ -67,7 +65,7 @@ def daily_power_consumption(
     Note: This reports Wh consumed during observed periods.
     """
     sample_interval_hours = sample_interval_seconds / 3600
-    power_consumption = np.sum(vals) * sample_interval_hours
+    power_consumption = np.nansum(vals) * sample_interval_hours
     return float(power_consumption)
 
 
@@ -105,40 +103,45 @@ def process_stats(
     prefix = f"{prefix}_" if prefix else ""
 
     if day not in stats:
-        stats[day] = {}
+        stats[day] = {
+            "mae": {},
+            "rmse": {},
+            "smape": {},
+            "power": {},
+            "mains_counts": {},
+            "appliance_counts": {},
+            "counts_differences": {},
+        }
 
-    if "true_power_consumption" not in stats[day]:
-        stats[day]["true_power_consumption"] = daily_power_consumption(
+    if "true_power_consumption" not in stats[day]["power"]:
+        stats[day]["power"]["true_power_consumption"] = daily_power_consumption(
             true_vals
         )
     if not is_mechanism:
-        stats[day][f"{prefix}perturbed_power_consumption"] = (
+        stats[day]["power"][f"{prefix}perturbed_power_consumption"] = (
             daily_power_consumption(perturbed_vals)
         )
     else:
-        if "total_true_appliance_count" not in stats[day]:
-            true_val_count = np.sum(true_vals)
-            stats[day]["total_true_appliance_count"] = true_val_count
-        perturbed_val_count = np.sum(perturbed_vals)
+        if "total_true_appliance_count" not in stats[day]["appliance_counts"]:
+            true_val_count = np.nansum(true_vals)
+            stats[day]["appliance_counts"]["total_true_appliance_count"] = (
+                true_val_count
+            )
+        perturbed_val_count = np.nansum(perturbed_vals)
         difference = (
-            stats[day]["total_true_appliance_count"] - perturbed_val_count
+            stats[day]["appliance_counts"]["total_true_appliance_count"]
+            - perturbed_val_count
         )
-        stats[day].update(
-            {
-                f"{prefix}total_appliance_count": perturbed_val_count,
-                f"{prefix}counts_difference": difference,
-            }
+        stats[day]["appliance_counts"][f"{prefix}total_appliance_count"] = (
+            perturbed_val_count
         )
-    # h_stat, p_val = kruskal_wallis(true_vals, perturbed_vals)
-    stats[day].update(
-        {
-            f"{prefix}rmse": rmse(true_vals, perturbed_vals),
-            f"{prefix}smape": smape(true_vals, perturbed_vals),
-            f"{prefix}mae": mae(true_vals, perturbed_vals),
-            # f"{prefix}kruskal-wallis_h_stat": h_stat,
-            # f"{prefix}kruskal-wallis_p_val": p_val,
-        }
-    )
+        stats[day]["counts_differences"][f"{prefix}counts_difference"] = (
+            difference
+        )
+
+    stats[day]["rmse"][f"{prefix}rmse"] = rmse(true_vals, perturbed_vals)
+    stats[day]["smape"][f"{prefix}smape"] = smape(true_vals, perturbed_vals)
+    stats[day]["mae"][f"{prefix}mae"] = mae(true_vals, perturbed_vals)
 
 
 def create_table(days: list[str], stats: dict) -> pa.Table:
@@ -225,6 +228,7 @@ def main():
         {p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")}
     )
     stats = {}
+
     for day in days:
         # dplm utility
         _, mains_sum = dplm_aggregate(

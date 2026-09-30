@@ -35,12 +35,11 @@ def return_bounds_snap(column, intervals, interval_size):
 
 
 def return_levels(lower, upper, boundaries):
-    """Maps (lower, upper) bound pairs back to their interval level index.
-    """
+    """Maps (lower, upper) bound pairs back to their interval level index."""
     lower = np.asarray(lower, dtype=float)
     upper = np.asarray(upper, dtype=float)
     idx_of_lower = np.searchsorted(boundaries, lower, side="left")
-    levels = idx_of_lower + 1
+    levels = idx_of_lower
     return levels
 
 
@@ -83,9 +82,7 @@ def ldp_energy_encode_vectorise(
 ) -> tuple[pa.Table, pa.Array | pa.ChunkedArray]:
     result = {}
     for column in tbl.column_names:
-        levels = tbl.column(
-            column
-        ).to_numpy()
+        levels = tbl.column(column).to_numpy()
         one_hot = np.zeros((num_rows, num_levels), dtype=np.int8)
 
         valid = levels > 0
@@ -388,15 +385,21 @@ def ldp_energy_mechanism(
 #     return aggregated_perturbed_values  # (t, m)
 
 
-def ldp_aggregate(tables: np.ndarray, epsilon_vals: np.ndarray, n_homes, n_bins):
+def ldp_aggregate(
+    tables: np.ndarray, epsilon_vals: np.ndarray, n_homes, n_bins
+):
     epsilon = np.nanmax(epsilon_vals, axis=1)
     epsilon = pd.Series(epsilon).replace(0, np.nan).ffill().to_numpy()[:, None]
     q_prob = ldp_probability(epsilon)
     agg_test_perturbed_arr = tables.reshape(
         tables.shape[0], n_homes, n_bins
-    ) # input is (t, n*d*m), output is (t, n, d*m)
+    )  # input is (t, n*d*m), output is (t, n, d*m)
     reporting_mask = ~np.isnan(agg_test_perturbed_arr)
-    n_reports = reporting_mask.sum(axis=1)  # (t, d*m) — users reporting, per appliance
+    n_reports = reporting_mask.sum(
+        axis=1
+    )  # (t, d*m) — users reporting, per appliance
     perturbed_sums = np.nansum(agg_test_perturbed_arr, axis=1)  # (t, d*m)
-    aggregated_perturbed_values = (perturbed_sums - n_reports * q_prob) / (0.5 - q_prob)
+    aggregated_perturbed_values = (perturbed_sums - n_reports * q_prob) / (
+        0.5 - q_prob
+    )
     return aggregated_perturbed_values, epsilon.squeeze()  # (t, d*m)

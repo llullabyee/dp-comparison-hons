@@ -7,17 +7,20 @@ import pyarrow as pa
 
 
 def return_bounds_snap(column, intervals, interval_size):
-    """Always assigns to the interval [intervals[idx-1], intervals[idx]],
-    even for values landing exactly on a boundary — no zero-width exact case.
+    """Assigns to the interval [intervals[idx-1], intervals[idx]],
+    except an exact 0, which returns the zero-width pair (0, 0).
     """
     column = np.asarray(column, dtype=float)
     idx = np.searchsorted(intervals, column, side="left")
-    idx = np.clip(
-        idx, 1, interval_size - 1
-    )  # ensure idx-1 is valid, and idx never falls on the last point alone
+    idx = np.clip(idx, 1, interval_size - 1)
 
     lower = intervals[idx - 1]
     upper = intervals[idx]
+
+    # 0 handling: exact zeros get (0, 0) instead of (0, 150)
+    is_zero = column == 0
+    lower = np.where(is_zero, 0.0, lower)
+    upper = np.where(is_zero, 0.0, upper)
 
     return lower, upper
 
@@ -35,11 +38,16 @@ def return_bounds_snap(column, intervals, interval_size):
 
 
 def return_levels(lower, upper, boundaries):
-    """Maps (lower, upper) bound pairs back to their interval level index."""
+    """Maps (lower, upper) bound pairs back to their interval level index.
+    (0, 0) maps to level 0.
+    """
     lower = np.asarray(lower, dtype=float)
     upper = np.asarray(upper, dtype=float)
     idx_of_lower = np.searchsorted(boundaries, lower, side="left")
     levels = idx_of_lower + 1
+
+    # 0 handling: a zero-width (0, 0) pair gets level 0
+    levels = np.where((lower == 0) & (upper == 0), 0, levels)
     return levels
 
 
@@ -68,7 +76,7 @@ def ldp_energy_discretise(
     discretised = {
         name: discretised[name]
         if name in discretised
-        else np.full(num_rows, 1, dtype=dtype)
+        else np.full(num_rows, 0, dtype=dtype)
         for name in appliance_names
     }
 

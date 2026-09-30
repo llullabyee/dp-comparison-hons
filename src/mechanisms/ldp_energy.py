@@ -39,7 +39,7 @@ def return_levels(lower, upper, boundaries):
     lower = np.asarray(lower, dtype=float)
     upper = np.asarray(upper, dtype=float)
     idx_of_lower = np.searchsorted(boundaries, lower, side="left")
-    levels = idx_of_lower
+    levels = idx_of_lower + 1
     return levels
 
 

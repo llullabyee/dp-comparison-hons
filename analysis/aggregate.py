@@ -2,23 +2,21 @@ import concurrent.futures
 import time
 from functools import reduce
 from pathlib import Path
-import pandas as pd
 
 import numpy as np
+import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from src.data.load_data import make_run_dir
 from src.mechanisms.gai import (
-    build_boundary_list,
     gai_aggregate,
     gai_discretise,
     return_bounds,
     true_aggregate,
 )
 from src.mechanisms.ldp_energy import ldp_aggregate
-from src.utils.appliance_map import ApplianceList
 from src.utils.config import (
     MECHANISMS,
     PREPROCESS_DIR,
@@ -49,9 +47,15 @@ days = sorted(
 )
 
 # %% directory creation
-run_dir, mains_dir, apps_dir, bin_mains_dir, gai_dir, ldp_apps_dir, ldp_mains_dir = make_run_dir(
-    epsilon, window_size, peak, domain_max
-)
+(
+    run_dir,
+    mains_dir,
+    apps_dir,
+    bin_mains_dir,
+    gai_dir,
+    ldp_apps_dir,
+    ldp_mains_dir,
+) = make_run_dir(epsilon, window_size, peak, domain_max)
 mains_dir.mkdir(parents=True, exist_ok=True)
 apps_dir.mkdir(parents=True, exist_ok=True)
 bin_mains_dir.mkdir(parents=True, exist_ok=True)
@@ -136,7 +140,9 @@ def aggregation_counts(home_ids, day, directory):
     values = values.reshape(values.shape[0], n_homes, n_appliance_bins)
     true_sum = np.nansum(values, axis=1)
     del column_names[0]
-    tbl = pa.table({name: true_sum[:, i] for i, name in enumerate(column_names)})
+    tbl = pa.table(
+        {name: true_sum[:, i] for i, name in enumerate(column_names)}
+    )
     tbl = tbl.add_column(0, "timestamp", timestamps)
     return tbl
 
@@ -157,21 +163,36 @@ def ldp_loop(day, in_dir, out_dir, datatype):
                     ["timestamp"] + [f"{c}_{i}" for c in value_cols]
                 )
             )
-            col_groups.append([f"{c}_{i}" for c in value_cols if c != "epsilon"])
+            col_groups.append(
+                [f"{c}_{i}" for c in value_cols if c != "epsilon"]
+            )
         for idx, tbl in enumerate(mech_tables):
             for i, field in enumerate(tbl.schema):
                 if pa.types.is_null(field.type):
-                    tbl = tbl.set_column(i, field.name, pa.array([None] * tbl.num_rows, type=pa.float64()))
+                    tbl = tbl.set_column(
+                        i,
+                        field.name,
+                        pa.array([None] * tbl.num_rows, type=pa.float64()),
+                    )
             mech_tables[idx] = tbl
         joined = reduce(
             lambda l, r: l.join(r, keys="timestamp", join_type="full outer"),
             mech_tables,
         ).sort_by("timestamp")
-        epsilon_table = joined.select([c for c in joined.column_names if c.startswith("epsilon_")])
-        epsilons = np.column_stack([epsilon_table.column(c).to_numpy(zero_copy_only=False) for c in epsilon_table.column_names])
+        epsilon_table = joined.select(
+            [c for c in joined.column_names if c.startswith("epsilon_")]
+        )
+        epsilons = np.column_stack(
+            [
+                epsilon_table.column(c).to_numpy(zero_copy_only=False)
+                for c in epsilon_table.column_names
+            ]
+        )
         epsilons = np.where(epsilons == None, 0, epsilons).astype(float)
 
-        joined = joined.drop_columns([c for c in joined.column_names if c.startswith("epsilon_")])
+        joined = joined.drop_columns(
+            [c for c in joined.column_names if c.startswith("epsilon_")]
+        )
 
         del raw_tables, mech_tables, epsilon_table
         timestamps = joined.column("timestamp")
@@ -179,7 +200,7 @@ def ldp_loop(day, in_dir, out_dir, datatype):
         joined = joined.drop_columns("timestamp")
         joined = pa.table(
             {
-                c: pc.fill_null(pc.cast(joined.column(c), pa.int8()), -1)
+                c: pc.cast(joined.column(c), pa.int16())
                 for c in joined.column_names
             }
         )
@@ -194,7 +215,9 @@ def ldp_loop(day, in_dir, out_dir, datatype):
         mech_arrs = np.hstack(mech_arrs)
         mech_arrs = mech_arrs.reshape(mech_arrs.shape[0], len(col_groups), -1)
 
-        aggregated_perturbed_values, eps_arrs = ldp_aggregate(mech_arrs, np.array(epsilons), n_homes, n_appliance_bins)
+        aggregated_perturbed_values, eps_arrs = ldp_aggregate(
+            mech_arrs, np.array(epsilons), n_homes, n_appliance_bins
+        )
         del mech_arrs
         appliance_names = [c.rsplit("_", 1)[0] for c in col_groups[0]]
 
@@ -216,7 +239,9 @@ def ldp_loop(day, in_dir, out_dir, datatype):
         print(f"{datatype} Debiasing — homes reported {day}: {agg_home_ids}")
 
 
-def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_apps_dir, ldp_mains_dir):
+def process_day(
+    day, boundary_list, num_boundaries, gai_dir, ldp_apps_dir, ldp_mains_dir
+):
     mains_fps = sorted(mains_dir.glob(f"*_{day}.parquet"))
     agg_home_ids = [fp.stem.split("_")[0] for fp in mains_fps]
     tables = [
@@ -232,10 +257,7 @@ def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_apps_dir, ldp_m
     timestamps = joined.column("timestamp")
     joined = joined.drop_columns("timestamp")
     joined = pa.table(
-        {
-            c: pc.fill_null(pc.cast(joined.column(c), pa.int16()), -1)
-            for c in joined.column_names
-        }
+        {c: pc.cast(joined.column(c), pa.int16()) for c in joined.column_names}
     )
     arr = np.column_stack(
         [
@@ -272,7 +294,11 @@ def process_day(day, boundary_list, num_boundaries, gai_dir, ldp_apps_dir, ldp_m
 
 
 def _run_day(
-    day, home_ids, preprocess_aggregate_gai_dir, preprocess_agg_ldp_mains_dir, preprocess_agg_ldp_apps_dir
+    day,
+    home_ids,
+    preprocess_aggregate_gai_dir,
+    preprocess_agg_ldp_mains_dir,
+    preprocess_agg_ldp_apps_dir,
 ):
     """
     Per-day unit of work extracted from aggregate_all's loop body, so it can
@@ -287,16 +313,26 @@ def _run_day(
     preprocess_agg_ldp_mains_fp = (
         preprocess_agg_ldp_mains_dir / f"{day}.parquet"
     )
-    preprocess_agg_ldp_apps_fp = (
-        preprocess_agg_ldp_apps_dir / f"{day}.parquet"
+    preprocess_agg_ldp_apps_fp = preprocess_agg_ldp_apps_dir / f"{day}.parquet"
+    preprocess_main_ready = preprocess_aggregate_gai_dir.exists() and (
+        len(list(preprocess_aggregate_gai_dir.glob("*.parquet"))) == 30
     )
-    preprocess_main_ready = preprocess_aggregate_gai_dir.exists() and (len(list(preprocess_aggregate_gai_dir.glob("*.parquet"))) == 30)
-    preprocess_app_ready = preprocess_agg_ldp_apps_dir.exists() and (len(list(preprocess_agg_ldp_apps_dir.glob("*.parquet"))) == 30)
-    preprocess_bin_mains_ready = preprocess_agg_ldp_mains_dir.exists() and (len(list(preprocess_agg_ldp_mains_dir.glob("*.parquet"))) == 30)
+    preprocess_app_ready = preprocess_agg_ldp_apps_dir.exists() and (
+        len(list(preprocess_agg_ldp_apps_dir.glob("*.parquet"))) == 30
+    )
+    preprocess_bin_mains_ready = preprocess_agg_ldp_mains_dir.exists() and (
+        len(list(preprocess_agg_ldp_mains_dir.glob("*.parquet"))) == 30
+    )
 
-    gai_ready = gai_dir.exists() and (len(list(gai_dir.glob("*.parquet"))) == 30)
-    ldp_mains_ready = ldp_mains_dir.exists() and (len(list(ldp_mains_dir.glob("*.parquet"))) == 120)
-    ldp_apps_ready = ldp_apps_dir.exists() and (len(list(ldp_apps_dir.glob("*.parquet"))) == 120)
+    gai_ready = gai_dir.exists() and (
+        len(list(gai_dir.glob("*.parquet"))) == 30
+    )
+    ldp_mains_ready = ldp_mains_dir.exists() and (
+        len(list(ldp_mains_dir.glob("*.parquet"))) == 120
+    )
+    ldp_apps_ready = ldp_apps_dir.exists() and (
+        len(list(ldp_apps_dir.glob("*.parquet"))) == 120
+    )
 
     if not preprocess_main_ready:
         print(f"[{day}] raw_aggregate (mains)...")
@@ -317,7 +353,9 @@ def _run_day(
         del apps_agg_tbl
     if not preprocess_bin_mains_ready:
         print(f"[{day}] aggregation_counts (binary mains)...")
-        bin_mains_agg_tbl = aggregation_counts(home_ids, day, preprocess_bin_mains)
+        bin_mains_agg_tbl = aggregation_counts(
+            home_ids, day, preprocess_bin_mains
+        )
         print(f"[{day}] writing aggregate parquet preprocess bin_mains file...")
         pq.write_table(bin_mains_agg_tbl, preprocess_agg_ldp_mains_fp)
         del bin_mains_agg_tbl
@@ -328,7 +366,12 @@ def _run_day(
     if not gai_ready or not ldp_mains_ready or not ldp_apps_ready:
         print(f"[{day}] process_day (GAI + LDP-Energy mechanisms)...")
         _ = process_day(
-            day, boundary_list, num_boundaries, gai_dir, ldp_apps_dir, ldp_mains_dir
+            day,
+            boundary_list,
+            num_boundaries,
+            gai_dir,
+            ldp_apps_dir,
+            ldp_mains_dir,
         )
     else:
         print(
@@ -342,8 +385,12 @@ def _run_day(
 
 def main(home_ids, max_workers=2, use_processes=True):
     preprocess_aggregate_gai_dir = preprocess_mains / "gai"
-    preprocess_agg_ldp_apps_dir = PREPROCESS_DIR / f"sens={domain_max:g}" / "ldp_energy" / "appliances"
-    preprocess_agg_ldp_mains_dir = PREPROCESS_DIR / f"sens={domain_max:g}" / "ldp_energy" / "mains"
+    preprocess_agg_ldp_apps_dir = (
+        PREPROCESS_DIR / f"sens={domain_max:g}" / "ldp_energy" / "appliances"
+    )
+    preprocess_agg_ldp_mains_dir = (
+        PREPROCESS_DIR / f"sens={domain_max:g}" / "ldp_energy" / "mains"
+    )
     preprocess_aggregate_gai_dir.mkdir(parents=True, exist_ok=True)
     preprocess_agg_ldp_apps_dir.mkdir(parents=True, exist_ok=True)
     preprocess_agg_ldp_mains_dir.mkdir(parents=True, exist_ok=True)

@@ -121,16 +121,19 @@ def true_aggregate(
     q_prob = 1 / (num_boundaries - 1 + np.exp(epsilon))
     p_prob = np.exp(epsilon) * q_prob
     boundary_arr = np.asarray(boundary_list)
+    arr = np.asarray(arr, dtype=float)
     n = arr.shape[0]
 
-    mask = arr != -1
-    n_reports = mask.sum(axis=1)
+    valid = ~np.isnan(arr)  # only NaN is excluded; inf is not silently dropped
+    n_reports = valid.sum(axis=1)
 
-    levels, inv = np.unique(arr[mask], return_inverse=True)
-    col_idx = np.searchsorted(boundary_arr, levels)
-    row_ids, _ = np.nonzero(mask)
+    row_ids, _ = np.nonzero(valid)  # same row-major order as arr[valid]
+    col_idx = np.searchsorted(boundary_arr, arr[valid])
 
-    flat_idx = row_ids * num_boundaries + col_idx[inv]
+    # Values are exact boundary points, so every index must be in range.
+    assert (col_idx < num_boundaries).all()
+
+    flat_idx = row_ids * num_boundaries + col_idx
     counts = np.bincount(flat_idx, minlength=n * num_boundaries).reshape(
         n, num_boundaries
     )

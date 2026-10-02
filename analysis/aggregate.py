@@ -92,11 +92,14 @@ def raw_aggregate(home_ids, day, directory, col_name):
     values = np.column_stack(
         [joined.column(c).to_numpy(zero_copy_only=False) for c in home_cols]
     )
-    values = np.nan_to_num(values, nan=0.0)
-    lower, upper = return_bounds(values, boundary_list, boundary_list.size)
-    values = gai_discretise(values, upper, lower)
-    counts, _, _, _ = true_aggregate(
-        values, epsilon, boundary_list.size, boundary_list
+    valid = ~np.isnan(values)
+    disc = np.full(values.shape, np.nan)
+    lower, upper = return_bounds(
+        values[valid], boundary_list, boundary_list.size
+    )
+    disc[valid] = gai_discretise(values[valid], upper, lower)
+    counts, n_reports, _, _ = true_aggregate(
+        disc, epsilon, boundary_list.size, boundary_list
     )
     counts = pd.DataFrame(counts, columns=boundary_list)
     tbl = pa.Table.from_pandas(counts)

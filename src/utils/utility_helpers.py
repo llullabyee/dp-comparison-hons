@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from scipy.stats import kruskal, norm
 
@@ -257,3 +258,13 @@ def dplm_aggregate(home_ids, day, directory, col_name):
     )
     values = np.nan_to_num(values, nan=0.0)
     return joined, np.sum(values, axis=1)
+
+
+def monthly_power_consumption(directory, home_id, col_name) -> np.ndarray:
+    files = sorted(str(p) for p in directory.glob(f"{home_id}_*.parquet"))
+    if not files:
+        return None  # or raise/log
+
+    table = ds.dataset(files, format="parquet").to_table(columns=[col_name])
+    arr = table["my_col"].to_numpy()
+    return arr

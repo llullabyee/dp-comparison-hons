@@ -13,6 +13,7 @@ from src.utils.config import (
 )
 from src.utils.utility_helpers import (
     dplm_aggregate,
+    monthly_power_consumption,
     process_stats,
 )
 
@@ -36,7 +37,11 @@ preprocess_agg = PREPROCESS_DIR / f"sens={domain_max:g}" / "ldp_energy"
     ldp_mains_dir,
 ) = make_run_dir(epsilon, window_size, peak, domain_max)
 utils_dir = run_dir / "utility"
+billing_dir = run_dir / "billing_metrics"
+
 utils_dir.mkdir(parents=True, exist_ok=True)
+billing_dir.mkdir(parents=True, exist_ok=True)
+
 home_ids = sorted(
     {p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")}
 )
@@ -44,6 +49,7 @@ days = sorted(
     {p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")}
 )
 stats = {}
+billing_stats = {}
 
 
 def process_ldp(bin_type, day):
@@ -64,10 +70,10 @@ def process_ldp(bin_type, day):
         stats[day]["avg_epsilon"][label] = mean_eps
 
 
-def metric_table(stats: dict, metric: str) -> pa.Table:
+def metric_table(stats: dict, metric: str, col_name) -> pa.Table:
     days = sorted(stats)
     labels = sorted({l for d in days for l in stats[d].get(metric, {})})
-    cols = {"day": pa.array(days, pa.string())}
+    cols = {col_name: pa.array(days, pa.string())}
     for label in labels:
         cols[label] = pa.array(
             [
@@ -127,9 +133,32 @@ def main():
         process_ldp("mains", day)
 
     metrics = sorted({k for day_stats in stats.values() for k in day_stats})
-    tables = {metric: metric_table(stats, metric) for metric in metrics}
+    tables = {metric: metric_table(stats, metric, "day") for metric in metrics}
     for metric, table in tables.items():
         out = utils_dir / f"{metric}.csv"
+        csv.write_csv(table, out)
+
+    # billing
+    for home_id in home_ids:
+        true_monthly_profile = monthly_power_consumption(
+            preprocess_mains, home_id, "mains"
+        )
+        dplm_monthly_profile = monthly_power_consumption(
+            run_dir, home_id, "dplm_noise"
+        )
+        process_stats(
+            billing_stats,
+            home_id,
+            true_monthly_profile,
+            dplm_monthly_profile,
+            "billing",
+        )
+    tables = {
+        metric: metric_table(billing_stats, metric, "home_id")
+        for metric in metrics
+    }
+    for metric, table in tables.items():
+        out = billing_dir / f"{metric}.csv"
         csv.write_csv(table, out)
 
 

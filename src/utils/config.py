@@ -1,22 +1,30 @@
-import yaml
+import json
+import sys
 from pathlib import Path
 
+
+def load_params():
+    if "--config" in sys.argv:
+        idx = sys.argv.index("--config")
+        with open(sys.argv[idx + 1]) as f:
+            return json.load(f)
+    raise ValueError("No config provided")
+
+
+DATA_DIR = Path(r"Y:\IDEAL")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / 'data' / 'eco'
-RAW_DIR = DATA_DIR / 'raw'
-PREPROCESS_DIR = DATA_DIR / 'preprocess'
-ANALYSIS_DIR = PROJECT_ROOT / 'analysis'
-RESULT_DIR = PROJECT_ROOT / 'results'
-CSV_DIR = RESULT_DIR / 'csvs'
-SRC_DIR = PROJECT_ROOT / 'src'
-UTIL_DIR = SRC_DIR / 'utils'
+CONFIG_DIR = PROJECT_ROOT / "config"
+SWEEP_CONFIG_PATH = CONFIG_DIR / "sweep.yaml"
 
+MAINS_DIR = DATA_DIR / "household_sensors" / "electric_mains"
+APPLIANCES_DIR = DATA_DIR / "room_and_appliance_sensors" / "appliances_electric"
+PREPROCESS_DIR = DATA_DIR / "preprocess"
+PREPROCESS_MAINS_DIR = PREPROCESS_DIR / "mains"
+ANALYSIS_DIR = PROJECT_ROOT / "analysis"
+RESULT_DIR = DATA_DIR / "DP_results"
+PERTURBED_MAINS_DIR = RESULT_DIR / "mains"
+PERTURBED_APPS_DIR = RESULT_DIR / "appliances"
+SRC_DIR = PROJECT_ROOT / "src"
+UTIL_DIR = SRC_DIR / "utils"
 
-EPSILON = 1.0
-DOMAIN_MAX = 11100
-WINDOW_SIZE = 3
-
-def load_config(config_path: str | Path = None) -> dict:
-    path = Path(config_path) if config_path else PROJECT_ROOT / "config" / "config.yaml"
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+MECHANISMS = ["LBU", "LSP", "LBD", "LBA"]

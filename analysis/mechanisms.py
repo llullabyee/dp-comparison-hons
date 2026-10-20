@@ -1,51 +1,224 @@
-# %%
-import os
-import math
-import glob
-from datetime import datetime, timedelta
-import numpy as np
-import pandas as pd
+"""
+this code needs to be redone a bit to not do the meter dirs all at once.
+"""
 
-from src.data.load_data import load_data, make_meter_dir
-from src.mechanisms.ldp_energy import EPSILON_COLUMNS, concatenate_bits, ldp_energy_mechanism
-from src.utils.config import load_config
-from src.mechanisms.gai import gai_mechanism, build_boundary_list
-from src.mechanisms.dplm import dplm_mechanism
-
-from src.utils.config import (
-    ANALYSIS_DIR,
-    PREPROCESS_DIR,
-    RESULT_DIR,
-    EPSILON,
-    DOMAIN_MAX,
-    WINDOW_SIZE
+# %% import statements
+from collections import deque
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    as_completed,
 )
 
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-# %%
-# |X| ~= 3 * e^eps + 2 intervals spread across [0, DOMAIN_MAX].
-boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
-excess = 0
-prev_day = None
-prev_meter = None
+from src.data.load_data import make_run_dir
+from src.mechanisms.dplm import dplm_mechanism
+from src.mechanisms.gai import gai_mechanism
+from src.mechanisms.ldp_energy import (
+    ldp_energy_mechanism,
+)
+from src.utils.appliance_map import ApplianceList
+from src.utils.config import (
+    MECHANISMS,
+    PREPROCESS_DIR,
+    PREPROCESS_MAINS_DIR,
+    load_params,
+)
 
-for df, meter_id, filename in load_data(PREPROCESS_DIR):
-    # if meter_id != prev_meter or (prev_day is not None and day != prev_day + timedelta(days=1)):
-    #     dplm_excess = 0
-    #     ldp_energy_excess = 0
-    # prev_day = day
-    # prev_meter = meter_id
+# %% global variable and list initialisation
+params = load_params()
+peak = params["peak"]
+epsilon = params["epsilon"]
+window_size = params["window_size"]
+domain_max = params["domain_max"]
 
-    print(f"\rProcessing file for meter {meter_id}", end='', flush=True)
-    perturbed_meter_dir, perturbed_result_fp = make_meter_dir((RESULT_DIR / 'perturbed'), filename)
+# boundary_list = build_boundary_list(epsilon, domain_max)
+boundary_list = np.linspace(0, domain_max, 10 + 1)
+appliance_list = list(ApplianceList)
+num_boundaries = len(boundary_list)
 
-    #dplm_result_dir, dplm_result_fp = make_meter_dir((RESULT_DIR / 'csvs', meter_id, 'dplm'), filename)
-    gai_series = gai_mechanism(df, boundary_list, EPSILON)
-    dplm_series = dplm_mechanism(df, 0.98, 0.10, 1500)
-    timestamps = df['timestamp']
-    days = df['day']
-    # ldp_energy_df, ldp_energy_excess = ldp_energy_mechanism('LSP', df, EPSILON, WINDOW_SIZE, boundary_list, ldp_energy_excess)
-    # ldp_energy_series = concatenate_bits(ldp_energy_df, EPSILON_COLUMNS)
-    perturbed_df = pd.concat([timestamps, days, gai_series, dplm_series], axis = 1)
-#    df[['gai_noise']].to_csv(gai_result_fp, index=False)
-    perturbed_df.to_parquet(perturbed_result_fp, index=False, compression='snappy')
+preprocess_mains = PREPROCESS_MAINS_DIR
+# preprocess_apps = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
+preprocess_apps = PREPROCESS_DIR / f"sens={domain_max:g}" / "appliances"
+preprocess_bin_mains = PREPROCESS_DIR / f"sens={domain_max:g}" / "mains"
+
+
+home_ids = sorted({p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")})
+days = sorted({p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")})
+
+# %% directory creation
+(
+    run_dir,
+    mains_dir,
+    apps_dir,
+    bin_main_dir,
+    gai_dir,
+    ldp_apps_dir,
+    ldp_mains_dir,
+) = make_run_dir(epsilon, window_size, peak, domain_max)
+mains_dir.mkdir(parents=True, exist_ok=True)
+apps_dir.mkdir(parents=True, exist_ok=True)
+bin_main_dir.mkdir(parents=True, exist_ok=True)
+
+
+# %% function definition — one home's worth of work, run inside a worker process
+def process_home(home_id):
+    np.random.seed(hash(home_id) & 0xFFFFFFFF)
+
+    dplm_excess = 0
+    mechanism_state = {
+        m: dict(
+            last_published_idx=0,
+            last_published_epsilon=0,
+            budget_spent=deque(maxlen=window_size - 1),
+            last_published_release=None,
+            global_idx=0,
+            excess=0,
+            last_published_report=None,
+        )
+        for m in MECHANISMS
+    }
+    mains_mechanism_state = {
+        m: dict(
+            last_published_idx=0,
+            last_published_epsilon=0,
+            budget_spent=deque(maxlen=window_size - 1),
+            last_published_release=None,
+            global_idx=0,
+            excess=0,
+            last_published_report=0,
+        )
+        for m in MECHANISMS
+    }
+
+    fps = sorted(preprocess_mains.glob(f"{home_id}_*.parquet"))
+
+    try:
+        for fp in fps:
+            app_fp = preprocess_apps / fp.name
+            bin_main_fp = preprocess_bin_mains / fp.name
+            print(f"[{home_id}] Processing mains: {fp}")
+            tbl = pq.read_table(fp)
+            mains_readings = (
+                tbl.column("mains").to_numpy(zero_copy_only=False).astype(float)
+            )
+
+            # %% gai perturbation
+            gai_values = gai_mechanism(mains_readings, boundary_list, epsilon)
+            # %% dplm perturbation
+            dplm_values, dplm_excess = dplm_mechanism(
+                mains_readings,
+                0.98,
+                epsilon,
+                domain_max,
+                peak,
+                excess=dplm_excess,
+            )
+            # %% table writing
+            perturbed_tbl = pa.table(
+                {
+                    "timestamp": tbl.column("timestamp"),
+                    "gai_noise": gai_values,
+                    "dplm_noise": dplm_values,
+                }
+            )
+            pq.write_table(perturbed_tbl, mains_dir / fp.name)
+
+            # %% LDP-Energy perturbation — sequential within the process.
+            # State must carry file-to-file for a given mechanism, and this
+            # process already gets its parallelism from running alongside
+            # other homes' processes, so no inner thread/process pool here
+            # (avoids oversubscribing cores).
+            if app_fp.exists():
+                print(f"[{home_id}] Processing appliances: {app_fp}")
+                app_tbl = pq.read_table(app_fp)
+                for mechanism in MECHANISMS:
+                    try:
+                        state = mechanism_state[mechanism]
+                        (
+                            ldp_noise,
+                            state["last_published_idx"],
+                            state["last_published_epsilon"],
+                            state["last_published_release"],
+                            state["global_idx"],
+                            state["excess"],
+                            state["last_published_report"],
+                        ) = ldp_energy_mechanism(
+                            mechanism,
+                            app_tbl,
+                            epsilon,
+                            window_size,
+                            state["last_published_idx"],
+                            state["last_published_epsilon"],
+                            state["budget_spent"],
+                            state["last_published_release"],
+                            state["global_idx"],
+                            state["excess"],
+                            state["last_published_report"],
+                        )
+                        perturbed_app_fp = apps_dir / f"{fp.stem}_{mechanism}.parquet"
+                        pq.write_table(ldp_noise, perturbed_app_fp)
+                        del ldp_noise
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Failed processing home {home_id}, file {fp.name} and mechanism {mechanism} (apps)"
+                        ) from e
+
+            if bin_main_fp.exists():
+                print(f"[{home_id}] Processing binary mains: {bin_main_fp}")
+                bin_main_tbl = pq.read_table(bin_main_fp)
+                for mechanism in MECHANISMS:
+                    try:
+                        state = mains_mechanism_state[mechanism]
+                        (
+                            ldp_noise,
+                            state["last_published_idx"],
+                            state["last_published_epsilon"],
+                            state["last_published_release"],
+                            state["global_idx"],
+                            state["excess"],
+                            state["last_published_report"],
+                        ) = ldp_energy_mechanism(
+                            mechanism,
+                            bin_main_tbl,
+                            epsilon,
+                            window_size,
+                            state["last_published_idx"],
+                            state["last_published_epsilon"],
+                            state["budget_spent"],
+                            state["last_published_release"],
+                            state["global_idx"],
+                            state["excess"],
+                            state["last_published_report"],
+                        )
+                        perturbed_bin_main_fp = (
+                            bin_main_dir / f"{fp.stem}_{mechanism}.parquet"
+                        )
+                        pq.write_table(ldp_noise, perturbed_bin_main_fp)
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Failed processing home {home_id}, file {fp.name} and mechanism {mechanism} (mains)"
+                        ) from e
+        return home_id
+    except Exception as e:
+        raise RuntimeError(f"Failed processing home {home_id} (gai/dplm mains)") from e
+
+
+# %% outer loop for perturbation — one process per home
+def main():
+    mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
+    apps_ready = apps_dir.exists() and any(apps_dir.iterdir())
+    if mains_ready and apps_ready:
+        return
+    else:
+        with ProcessPoolExecutor(max_workers=12) as ex:  # tune to core count
+            futures = {ex.submit(process_home, h): h for h in home_ids}
+            for fut in as_completed(futures):
+                completed_home = fut.result()  # raises here if that home's work errored
+                print(f"Finished home {completed_home}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,9 +1,8 @@
-import math
 import numpy as np
-import pandas as pd
+import pyarrow as pa
 
 
-def build_boundary_list(epsilon: float, max_value: int) -> list:
+def build_boundary_list(epsilon: float, max_value: int) -> np.ndarray:
     """
     Build the GAI interval grid over ``[0, max_value]``.
 
@@ -11,50 +10,75 @@ def build_boundary_list(epsilon: float, max_value: int) -> list:
     so higher privacy budgets (larger epsilon) allow a finer grid. The chosen
     number of points is then spread evenly (integer-valued) across the domain.
     """
-    count = max(2, round(3 * math.exp(epsilon) + 2))
-    step = max_value / (count - 1)
-    return [round(i * step) for i in range(count)]
+    target_count = round(3 * np.exp(epsilon) + 2)
+    count = max(2, min(max_value + 1, target_count))
+    return np.unique(np.round(np.linspace(0, max_value, count)).astype(int))
+    # count = max(2, round(3 * np.exp(epsilon) + 2))
+    # step = max_value / (count - 1)
+    # return np.asarray([round(i * step) for i in range(count)])
+
+
+# def return_bounds(column, boundaries, interval_size):
+#     idx = np.searchsorted(boundaries, column, side="left")
+#     exact = (idx < interval_size) & (
+#         boundaries[np.clip(idx, 0, interval_size - 1)] == column
+#     )
+#     lower = np.where(
+#         exact,
+#         boundaries[np.clip(idx, 0, interval_size - 1)],
+#         boundaries[np.clip(idx - 1, 0, interval_size - 1)],
+#     )
+#     upper = np.where(
+#         exact, lower, boundaries[np.clip(idx, 0, interval_size - 1)]
+#     )
+#     return lower, upper
 
 
 def return_bounds(column, boundaries, interval_size):
+    """
+    finds the boundaries of values, where the boundaries are
+    determined by [u,v). If a value falls on an exact boundary,
+    the value will be made the lower bound (u) whilst the next
+    boundary will be its upper bound. Assumption made: for a value
+    falling on or greater than the bounds listed, it will be clipped
+    (lower = upper)
+    """
     idx = np.searchsorted(boundaries, column, side="left")
-    exact = (idx < interval_size) & (boundaries[np.clip(idx, 0, interval_size - 1)] == column)
-    lower = np.where(exact, boundaries[np.clip(idx, 0, interval_size - 1)],
-                     boundaries[np.clip(idx - 1, 0, interval_size - 1)])
-    upper = np.where(exact, lower, boundaries[np.clip(idx, 0, interval_size - 1)])
+    exact = (idx < interval_size) & (
+        boundaries[np.clip(idx, 0, interval_size - 1)] == column
+    )
+    lower = np.where(
+        exact,
+        boundaries[np.clip(idx, 0, interval_size - 1)],
+        boundaries[np.clip(idx - 1, 0, interval_size - 1)],
+    )
+    upper = np.where(
+        exact,
+        boundaries[np.clip(idx + 1, 0, interval_size - 1)],
+        boundaries[np.clip(idx, 0, interval_size - 1)],
+    )
     return lower, upper
 
 
-def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.Series:
-    """
-    Vectorised GAI mechanism.
-
-    Produces the ``perturbed`` column with statistics identical to applying
-    ``find_bounds`` -> ``gai_discretise`` -> ``gai_perturb`` row-by-row, but
-    computed over the whole column with numpy instead of per-row Python loops.
-    """
-    df = df.copy()
-    boundaries = np.asarray(boundary_list)
-    n_int = boundaries.size
-    power = df["mains"].to_numpy()
-    n = power.size
-
-    lower, upper = return_bounds(power, boundaries, n_int)
-
-    # ---- gai_discretise ------------------------------------------------------
-    # choose upper with prob (x - lower) / (upper - lower), else lower.
+def gai_discretise(readings, upper, lower):
     span = (upper - lower).astype(float)
     with np.errstate(divide="ignore", invalid="ignore"):
-        v_prob = np.where(span > 0, (power - lower) / span, 0.0)
-    discretised = np.where(np.random.random(n) < v_prob, upper, lower)
+        v_prob = np.where(span > 0, (readings - lower) / span, 0.0)
+    discretised = np.where(
+        np.random.random(readings.shape) < v_prob, upper, lower
+    )
+    return discretised
 
-    # ---- gai_perturb ---------------------------------------------------------
+
+def gai_perturb(epsilon, n, n_int, boundaries, discretised):
     # keep true value with prob p = e^eps / (n_int - 1 + e^eps),
     # otherwise pick uniformly among the other n_int - 1 intervals.
-    exp_eps = math.exp(epsilon)
+    exp_eps = np.exp(epsilon)
     p_prob = exp_eps / (n_int - 1 + exp_eps)
 
-    pos = np.searchsorted(boundaries, discretised)  # index of each discretised value
+    pos = np.searchsorted(
+        boundaries, discretised
+    )  # index of each discretised value
     keep = np.random.random(n) < p_prob
 
     # uniform pick among the (n_int - 1) values that are not `pos`
@@ -62,39 +86,87 @@ def gai_mechanism(df: pd.DataFrame, boundary_list: list, epsilon: float) -> pd.S
     other[other >= pos] += 1
     result_idx = np.where(keep, pos, other)
 
-    df["gai_noise"] = boundaries[result_idx]
-    return df["gai_noise"]
+    return boundaries[result_idx]
 
 
-def gai_estimate(perturbed, boundary_list: list, epsilon: float) -> float:
+def gai_mechanism(
+    readings: np.ndarray, boundaries: np.ndarray, epsilon: float
+) -> np.ndarray:
     """
-    Debiased aggregate estimate for GAI-perturbed data (Gai et al. 2022, Sec 5.4).
+    Vectorised GAI mechanism.
 
-    k-RR outputs are categorical "votes", so summing the perturbed values
-    directly is biased towards the domain midpoint. This inverts the noise to
-    recover each grid value's true frequency and reports the estimated total.
-
-        Phi(X_j) = [C(X_j) * (|X| - 1 + e^eps) - n] / (e^eps - 1)
-        R        = sum_j  X_j * Phi(X_j)
-
-    where C(X_j) is the observed count of grid value X_j and n is the number of
-    perturbed records. `boundary_list` and `epsilon` must match those used to
-    perturb the data.
-
-    Returns the estimated total (R). Note Phi values are unbiased frequency
-    estimates and may individually be negative or non-integer.
+    Produces the ``perturbed`` column with statistics identical to applying
+    ``find_bounds`` -> ``gai_discretise`` -> ``gai_perturb`` row-by-row, but
+    computed over the whole column with numpy instead of per-row Python loops.
     """
-    boundaries = np.asarray(boundary_list)
-    values = np.asarray(perturbed)
-    n = values.size
-    k = boundaries.size
-    exp_eps = math.exp(epsilon)
+    n_int = boundaries.size
+    n = readings.size
 
-    # C(X_j): observed count of each grid value (values not on the grid -> 0).
-    counts = np.zeros(k, dtype=np.int64)
-    pos = np.searchsorted(boundaries, values)
-    on_grid = (pos < k) & (boundaries[np.clip(pos, 0, k - 1)] == values)
-    np.add.at(counts, pos[on_grid], 1)
+    lower, upper = return_bounds(readings, boundaries, n_int)
 
-    phi = (counts * (k - 1 + exp_eps) - n) / (exp_eps - 1)
-    return float(np.sum(boundaries * phi))
+    # ---- gai_discretise ------------------------------------------------------
+    discretised = gai_discretise(readings, upper, lower)
+
+    # ---- gai_perturb ---------------------------------------------------------
+    perturbed = gai_perturb(epsilon, n, n_int, boundaries, discretised)
+    return perturbed
+
+
+def true_aggregate(
+    arr: np.ndarray,
+    epsilon: float,
+    num_boundaries: int,
+    boundary_list: np.ndarray,
+):
+    q_prob = 1 / (num_boundaries - 1 + np.exp(epsilon))
+    p_prob = np.exp(epsilon) * q_prob
+    boundary_arr = np.asarray(boundary_list)
+    arr = np.asarray(arr, dtype=float)
+    n = arr.shape[0]
+
+    valid = ~np.isnan(arr)  # only NaN is excluded; inf is not silently dropped
+    n_reports = valid.sum(axis=1)
+
+    row_ids, _ = np.nonzero(valid)  # same row-major order as arr[valid]
+    col_idx = np.searchsorted(boundary_arr, arr[valid])
+
+    # Values are exact boundary points, so every index must be in range.
+    assert (col_idx < num_boundaries).all()
+
+    flat_idx = row_ids * num_boundaries + col_idx
+    counts = np.bincount(flat_idx, minlength=n * num_boundaries).reshape(
+        n, num_boundaries
+    )
+    return counts, n_reports, q_prob, p_prob
+
+
+def gai_aggregate(
+    arr: np.ndarray,
+    epsilon: float,
+    num_boundaries: int,
+    boundary_list: np.ndarray,
+):
+    counts, n_reports, q_prob, p_prob = true_aggregate(
+        arr, epsilon, num_boundaries, boundary_list
+    )
+
+    aggregated_perturbed_values = (counts - n_reports[:, None] * q_prob) / (
+        p_prob - q_prob
+    )
+    return aggregated_perturbed_values
+
+
+def gai_counts_to_power(tbl: pa.Table) -> np.ndarray:
+    """
+    Reconstructs total power per timestamp from GAI's debiased per-boundary
+    counts: R = sum_j y_j * Phi(y_j), where column headers are Phi(y_j)
+    (boundary wattage) and column values are y_j (debiased count).
+    """
+    level_cols = [c for c in tbl.column_names if c != "timestamp"]
+    boundary_values = np.array([float(c) for c in level_cols])
+
+    counts = np.column_stack(
+        [tbl.column(c).to_numpy(zero_copy_only=False) for c in level_cols]
+    )
+    reconstructed = counts @ boundary_values
+    return reconstructed

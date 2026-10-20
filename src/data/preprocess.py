@@ -1,80 +1,208 @@
-'''
+"""
 Preprocesses the ECO dataset. Reads sm_* / plug_* files from data/eco/raw/ and
-writes one parquet per household to data/eco/preprocess/, containing mains power,
-per-appliance power, and timestamp/day columns across all days.
-'''
-import os
-import glob
-import pandas as pd
+writes one parquet per household per day to data/eco/preprocess/mains/sm_*/,
+containing mains power, per-appliance power, and timestamp/day columns.
+"""
 
-from src.utils.appliance_map import get_appliance_name, APPLIANCE_MAP
-from src.utils.config import RAW_DIR, PREPROCESS_DIR
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime
+from functools import partial
 
-def get_plug_data(filepath: str, appliance_no: str, meter_id: str):
-    dirname, filename = os.path.split(filepath)
-    parts = dirname.split(os.sep)
-    parts = [p.replace('sm', 'plug') if p.startswith('sm_') else p for p in parts]
-    new_filepath = os.path.join(os.sep.join(parts), appliance_no, filename)
-    col_name = get_appliance_name(meter_id, appliance_no)
-    if not os.path.exists(new_filepath):
-        return pd.DataFrame(columns=[col_name], dtype='float32')
-    return pd.read_csv(new_filepath, usecols=[0], header=None,
-                       names=[col_name], dtype='float32')
+import numpy as np
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.csv as pv
+import pyarrow.parquet as pq
 
-def load_day(raw_fp: str, meter_id: str) -> pd.DataFrame:
-    """One day-file for one household: mains + all appliance plugs."""
-    mains = pd.read_csv(raw_fp, usecols=[0], header=None,
-                        names=['mains'], dtype='float32')
+from src.mechanisms.ldp_energy import (
+    ldp_energy_discretise,
+    ldp_energy_encode_vectorise,
+)
+from src.utils.appliance_map import ApplianceList
+from src.utils.config import (
+    APPLIANCES_DIR,
+    MAINS_DIR,
+    PREPROCESS_DIR,
+    PREPROCESS_MAINS_DIR,
+    load_params,
+)
 
-    plugs = [get_plug_data(raw_fp, no, meter_id)
-             for no in APPLIANCE_MAP[meter_id].values()]
+START_TIMESTAMP = datetime(2018, 4, 1)
+END_TIMESTAMP = datetime(2018, 5, 1)
+DAY_SECONDS = 86_400
 
-    # reindex to mains so a ragged plug file can't change the row count
-    df = pd.concat([mains] + plugs, axis=1).reindex(mains.index)
+_READ_OPTS = pv.ReadOptions(autogenerate_column_names=True)
+_CONV_OPTS = pv.ConvertOptions(
+    include_columns=["f0"], column_types={"f0": pa.float32()}
+)
 
-    day = os.path.splitext(os.path.basename(raw_fp))[0]      # '2012-06-01'
-    df.insert(0, 'timestamp', pd.date_range(start=day, periods=len(df), freq='s'))
-    df.insert(1, 'day', day)
-    return df
+params = load_params()
+epsilon = params["epsilon"]
+domain_max = params["domain_max"]
+boundary_list = np.linspace(0, domain_max, 10 + 1)
 
-def preprocess_user(meter_dir: str) -> int:
-    meter_id = os.path.basename(meter_dir)
-    day_fps = sorted(glob.glob(os.path.join(meter_dir, '*.csv')))
-    if not day_fps:
-        return 0
+# %% directory creation
+mains_dir = PREPROCESS_MAINS_DIR
+# apps_dir = PREPROCESS_DIR / f"eps={epsilon:g}" / f"sens={domain_max:g}"
+apps_dir = PREPROCESS_DIR / f"sens={domain_max:g}" / "appliances"
+bin_mains_dir = PREPROCESS_DIR / f"sens={domain_max:g}" / "mains"
 
-    df = pd.concat([load_day(fp, meter_id) for fp in day_fps], ignore_index=True)
-    df = df.sort_values('timestamp', ignore_index=True)
 
-    # --- reindex to a gap-free 1 Hz calendar -------------------------------
-    start = df['timestamp'].min().normalize()
-    end   = df['timestamp'].max().normalize() + pd.Timedelta('1D')
-    full  = pd.date_range(start, end, freq='s', inclusive='left')
+# --- stage 1: per-household mains/appliance merge -------------------------
 
-    n_before = len(df)
-    df = (df.set_index('timestamp')
-            .reindex(full)
-            .rename_axis('timestamp')
-            .reset_index())
-    n_inserted = len(df) - n_before
 
-    # rebuild `day` for inserted rows, then compress
-    df['day'] = df['timestamp'].dt.strftime('%Y-%m-%d').astype('category')
-    # ----------------------------------------------------------------------
+def _process_home(file, start_ts, end_ts, appliances_dir, out_dir):
+    home_id = file.stem.split("_")[0]
+    appliances = list(appliances_dir.glob(f"{home_id}_*.csv"))
+    if not appliances:
+        return
 
-    os.makedirs(PREPROCESS_DIR, exist_ok=True)
-    out_fp = os.path.join(PREPROCESS_DIR, f'{meter_id}.parquet')
-    df.to_parquet(out_fp, index=False, compression='snappy')
+    tbls = []
+    tbl = pv.read_csv(file, read_options=_READ_OPTS)
+    tbl = tbl.rename_columns(["timestamp", "mains"])
+    tbls.append(tbl)
 
-    print(f'{meter_id}: {len(df):,} rows '
-          f'({n_inserted:,} inserted, {n_inserted/86400:.1f} days missing) -> {out_fp}')
-    return int(df['mains'].max())
+    grouped = defaultdict(list)
+    for appliance in appliances:
+        appliance_name = appliance.stem.split("electric-appliance_")[-1]
+        tbl = pv.read_csv(appliance, read_options=_READ_OPTS)
+        tbl = tbl.rename_columns(["timestamp", appliance_name])
+        grouped[appliance_name].append(tbl)
 
-def main():
-    global_max = 0
-    for meter_dir in sorted(glob.glob(os.path.join(RAW_DIR, 'sm_*'))):
-        global_max = max(global_max, preprocess_user(meter_dir))
-    print('global mains max:', global_max)
+    for name, group in grouped.items():
+        merged = pa.concat_tables(group) if len(group) > 1 else group[0]
+        tbls.append(merged)
+
+    combined = tbls[0]
+    for t in tbls[1:]:
+        combined = combined.join(t, keys="timestamp")
+
+    combined = combined.set_column(
+        combined.column_names.index("timestamp"),
+        "timestamp",
+        pc.cast(combined.column("timestamp"), pa.timestamp("ms")),
+    )
+
+    if start_ts is not None or end_ts is not None:
+        mask = None
+        if start_ts is not None:
+            mask = pc.greater_equal(
+                combined.column("timestamp"),
+                pa.scalar(start_ts, type=pa.timestamp("ms")),
+            )
+        if end_ts is not None:
+            end_mask = pc.less(
+                combined.column("timestamp"),
+                pa.scalar(end_ts, type=pa.timestamp("ms")),
+            )
+            mask = end_mask if mask is None else pc.and_(mask, end_mask)
+        combined = combined.filter(mask)
+        if combined.num_rows == 0:
+            return
+
+    day_col = pc.cast(combined.column("timestamp"), pa.date32())
+    combined = combined.append_column("day", day_col)
+
+    unique_days = pc.unique(combined.column("day")).to_pylist()
+    for day in unique_days:
+        day_tbl = combined.filter(pc.equal(combined.column("day"), day))
+        day_tbl = day_tbl.drop_columns(["day"])
+        out_fp = out_dir / f"{home_id}_{day}.parquet"
+        pq.write_table(day_tbl, out_fp, compression="snappy")
+        print(f"Mains table written to {out_fp}")
+
+
+def preprocess_data(start_ts, end_ts, max_workers=16):
+    files = list(MAINS_DIR.iterdir())
+    worker = partial(
+        _process_home,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        appliances_dir=APPLIANCES_DIR,
+        out_dir=mains_dir,
+    )
+    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(worker, files))  # list() forces exceptions to surface
+
+
+# --- stage 2: per-household-day discretise + encode ------------------------
+
+
+def _process_binary_file(file, boundary_list, out_dir, bin_out_dir):
+    tbl = pq.read_table(file)
+    timestamps = tbl.column("timestamp")
+    mains_readings = tbl.select(["mains"])
+    mains_tbl, mains_levels, mains_rows = ldp_energy_discretise(
+        mains_readings, boundary_list, appliance_list=["mains"]
+    )
+    mains_tbl = ldp_energy_encode_vectorise(mains_tbl, mains_levels, mains_rows)
+    mains_tbl = mains_tbl.add_column(0, "timestamp", timestamps)
+    if mains_tbl.num_rows > 0:
+        pq.write_table(mains_tbl, bin_out_dir / file.name, compression="snappy")
+        print(
+            f"Binary Mains: {file.name}: {mains_tbl.num_columns - 1} bit columns -> {bin_out_dir}"
+        )
+    else:
+        print(f"Binary Mains {file.name} skipped - 0 valid rows.")
+
+    dropped = tbl.drop_columns(["timestamp", "mains"])
+    del tbl
+    null_masks = [pc.is_null(dropped.column(name)) for name in dropped.column_names]
+    all_null = null_masks[0]
+    for m in null_masks[1:]:
+        all_null = pc.and_(all_null, m)
+    keep_mask = pc.invert(all_null)
+    dropped = dropped.filter(keep_mask)
+    timestamps = timestamps.filter(keep_mask)
+    dropped = pa.table(
+        {name: pc.fill_null(dropped.column(name), 0) for name in dropped.column_names}
+    )
+    apps_tbl, num_levels, num_rows = ldp_energy_discretise(
+        dropped, boundary_list, appliance_list=ApplianceList
+    )
+    apps_tbl = ldp_energy_encode_vectorise(apps_tbl, num_levels, num_rows)
+    apps_tbl = apps_tbl.add_column(0, "timestamp", timestamps)
+    if apps_tbl.num_rows > 0:
+        pq.write_table(apps_tbl, out_dir / file.name, compression="snappy")
+        print(
+            f"Binary Apps: {file.name}: {apps_tbl.num_columns - 1} bit columns -> {out_dir}"
+        )
+    else:
+        print(f"Binary Apps {file.name} skipped - 0 valid rows.")
+
+
+def preprocess_binary_vector(boundary_list: np.ndarray, max_workers=16):
+    files = list(mains_dir.iterdir())
+    worker = partial(
+        _process_binary_file,
+        boundary_list=boundary_list,
+        out_dir=apps_dir,
+        bin_out_dir=bin_mains_dir,
+    )
+    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(worker, files))
+
+
+def main(max_workers=12):
+    mains_ready = mains_dir.exists() and any(mains_dir.iterdir())
+    apps_ready = apps_dir.exists() and any(apps_dir.iterdir())
+
+    mains_dir.mkdir(parents=True, exist_ok=True)
+    apps_dir.mkdir(parents=True, exist_ok=True)
+    bin_mains_dir.mkdir(parents=True, exist_ok=True)
+
+    if not mains_ready:
+        preprocess_data(
+            start_ts=START_TIMESTAMP,
+            end_ts=END_TIMESTAMP,
+            max_workers=max_workers,
+        )
+    if apps_ready:
+        return
+    # boundary_list = build_boundary_list(epsilon, domain_max)
+    preprocess_binary_vector(boundary_list, max_workers=max_workers)
+
 
 if __name__ == "__main__":
     main()

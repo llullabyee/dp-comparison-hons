@@ -1,38 +1,23 @@
-import os
-import glob
-import pandas as pd
-from datetime import datetime, timedelta
 from pathlib import Path
-import re
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from src.utils.config import RESULT_DIR
 
 
-def make_meter_dir(parts, filename):
-    if isinstance(parts, (str, os.PathLike)):
-        meter_dir = os.path.join(parts)
-    else:
-        meter_dir = os.path.join(*parts)
-    os.makedirs(meter_dir, exist_ok=True)
-    meter_fp = os.path.join(meter_dir, filename)
-    return meter_dir, meter_fp
-
-
-# def load_data(directory, subfolder=None):
-#     pattern = re.compile(r'^\d{4}-\d{2}-\d{2}\.csv$')
-#     if isinstance(directory, (str, os.PathLike)):
-#         base = directory
-#     else:
-#         base = os.path.join(*directory)
-#     for meter_dir in sorted(glob.glob(os.path.join(base, 'sm_*'))):
-#         meter_id = os.path.basename(meter_dir)
-#         search_dir = os.path.join(meter_dir, subfolder) if subfolder else meter_dir
-#         for filepath in sorted(glob.glob(os.path.join(search_dir, '*.csv'))):
-#             filename = os.path.basename(filepath)
-#             if not pattern.match(filename):
-#                 yield pd.read_csv(filepath), meter_id, filename
-#                 continue
-#             day = datetime.strptime(filename, '%Y-%m-%d.csv').date()
-#             yield pd.read_csv(filepath), meter_id, filename, day
-
-def load_data(preprocess_dir):
-    for fp in sorted(Path(preprocess_dir).glob('*.parquet')):
-        yield pd.read_parquet(fp), fp.stem, fp.name
+def make_run_dir(epsilon, window_size, peak, domain_max):
+    run_dir = (
+        RESULT_DIR
+        / f"eps={epsilon:g}"
+        / f"w={window_size}"
+        / f"peak={peak:g}"
+        / f"sens={domain_max:g}"
+    )
+    mains_dir = run_dir / "mains"
+    apps_dir = run_dir / "appliances"
+    bin_main_dir = run_dir / "binary_mains"
+    gai_dir = run_dir / "gai_agg"
+    ldp_apps_dir = run_dir / "ldp_appliances_agg"
+    ldp_mains_dir = run_dir / "ldp_mains_agg"
+    return run_dir, mains_dir, apps_dir, bin_main_dir, gai_dir, ldp_apps_dir, ldp_mains_dir

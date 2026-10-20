@@ -1,77 +1,154 @@
-import pandas as pd
 import numpy as np
-from pathlib import Path
+import pyarrow as pa
+import pyarrow.parquet as pq
+from pyarrow import csv
 
-from src.data.load_data import load_data, make_meter_dir
-from src.mechanisms.gai import build_boundary_list, gai_estimate
-from src.utils.config import CSV_DIR, PREPROCESS_DIR, EPSILON, DOMAIN_MAX
+from src.data.load_data import make_run_dir
+from src.mechanisms.gai import gai_counts_to_power
+from src.utils.config import (
+    MECHANISMS,
+    PREPROCESS_DIR,
+    PREPROCESS_MAINS_DIR,
+    load_params,
+)
+from src.utils.utility_helpers import (
+    dplm_aggregate,
+    monthly_power_consumption,
+    process_stats,
+)
+
+params = load_params()
+peak = params["peak"]
+epsilon = params["epsilon"]
+window_size = params["window_size"]
+domain_max = params["domain_max"]
+
+preprocess_mains = PREPROCESS_MAINS_DIR
+preprocess_apps = PREPROCESS_DIR / f"sens={domain_max:g}" / "appliances"
+preprocess_bin_mains = PREPROCESS_DIR / f"sens={domain_max:g}" / "mains"
+preprocess_agg = PREPROCESS_DIR / f"sens={domain_max:g}" / "ldp_energy"
+(
+    run_dir,
+    mains_dir,
+    apps_dir,
+    bin_main_dir,
+    gai_dir,
+    ldp_apps_dir,
+    ldp_mains_dir,
+) = make_run_dir(epsilon, window_size, peak, domain_max)
+utils_dir = run_dir / "utility"
+billing_dir = run_dir / "billing_metrics"
+
+utils_dir.mkdir(parents=True, exist_ok=True)
+billing_dir.mkdir(parents=True, exist_ok=True)
+
+home_ids = sorted({p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")})
+days = sorted({p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")})
+stats = {}
+billing_stats = {}
 
 
-COLUMNS = ['day', 'raw_sum', 'dplm_sum']
+def process_ldp(bin_type, day):
+    raw_fp = preprocess_agg / bin_type / f"{day}.parquet"
+    raw_tbl = pq.read_table(raw_fp).drop_columns("timestamp")
+    cols = raw_tbl.column_names
+    raw_counts = np.column_stack([raw_tbl[n].to_numpy() for n in cols])
+    del raw_tbl
+    ldp_dir = ldp_apps_dir if bin_type == "appliances" else ldp_mains_dir
+    for mechanism in MECHANISMS:
+        file = ldp_dir / f"{day}_{mechanism}.parquet"
+        ldp_tbl = pq.read_table(file, columns=[*cols, "epsilon"])
+        mean_eps = np.nanmean(ldp_tbl.column("epsilon").to_numpy())
+        ldp_counts = np.column_stack([ldp_tbl[c].to_numpy() for c in cols])
+        del ldp_tbl
+        label = f"{mechanism}_{bin_type}"
+        process_stats(stats, day, raw_counts, ldp_counts, label, bin_type)
+        stats[day]["avg_epsilon"][label] = mean_eps
+
+
+def metric_table(stats: dict, metric: str, col_name) -> pa.Table:
+    days = sorted(stats)
+    labels = sorted({l for d in days for l in stats[d].get(metric, {})})
+    cols = {col_name: pa.array(days, pa.string())}
+    for label in labels:
+        cols[label] = pa.array(
+            [
+                (lambda v: None if v is None else float(v))(
+                    stats[d].get(metric, {}).get(label)
+                )
+                for d in days
+            ],
+            pa.float64(),
+        )
+    return pa.table(cols)
 
 
 def main():
-    prev_meter = None
-    meter_rows = []
+    for day in days:
+        # dplm utility - power comparison
+        _, mains_sum = dplm_aggregate(home_ids, day, PREPROCESS_MAINS_DIR, "mains")
+        _, dplm_sum = dplm_aggregate(home_ids, day, mains_dir, "dplm_noise")
+        process_stats(stats, day, mains_sum, dplm_sum, "dplm")
 
-    # Grid must match the one used to perturb the stored gai files.
-    boundary_list = build_boundary_list(EPSILON, DOMAIN_MAX)
+        # gai utility - power comparison
+        gai_fp = gai_dir / f"{day}_gai.parquet"
+        gai_agg_tbl = pq.read_table(gai_fp)
+        gai_power_sum = gai_counts_to_power(gai_agg_tbl)
+        process_stats(stats, day, mains_sum, gai_power_sum, "gai_power")
 
-    perturb_gen = load_data(CSV_DIR, subfolder='perturbed')
-    raw_gen = load_data(PREPROCESS_DIR)
-
-    for (perturb_df, perturb_meter_id, perturb_filename, perturb_day), \
-        (raw_df, raw_meter_id, raw_filename, raw_day) in zip(
-            perturb_gen, raw_gen, strict=True
-    ):
-        # sanity check the three streams are actually aligned
-        assert perturb_meter_id == raw_meter_id and perturb_day == raw_day, \
-            f"Mismatch: {perturb_meter_id}/{perturb_day} vs {raw_meter_id}/{raw_day}"
-
-        if perturb_meter_id != prev_meter:
-            if prev_meter is not None:
-                _, util_sum_fp = make_meter_dir((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_total.csv")
-                pd.DataFrame(meter_sum_rows, columns=COLUMNS).to_csv(util_sum_fp, index=False)
-                _, util_smape_fp = make_meter_dir((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_SMAPE_mean.csv")
-                pd.DataFrame(smape_mean_rows, columns=['day', 'mean_smape']).to_csv(util_smape_fp, index=False)
-            prev_meter = perturb_meter_id
-            meter_sum_rows = []
-            smape_mean_rows = []
-            # frames = [raw_df['power'],dplm_df['dplm_noise']]
-
-# %%
-        raw_sum = raw_df['power'].sum()
-        # gai_sum = gai_df['gai_noise'].sum()  # naive (biased) total, for reference
-        # gai_est = gai_estimate(gai_df['gai_noise'], boundary_list, EPSILON)  # debiased (paper Sec 5.4)
-        dplm_sum = perturb_df['dplm_noise'].sum()
-        meter_sum_rows.append((perturb_day, raw_sum, dplm_sum))
-
-# %% Calculate Symmetric Mean Absolute Percentage Error
-        # smape = abs(raw_df['power'] - perturb_df['dplm_noise']) / \
-        #         ((abs(raw_df['power']) + abs(perturb_df['dplm_noise'])) / 2)
-        # smape_df = smape.to_frame(name='smape')
-
-        denom = (raw_df['power'].abs() + perturb_df['dplm_noise'].abs()) / 2
-        numer = (raw_df['power'] - perturb_df['dplm_noise']).abs()
-        smape = np.where(denom == 0, 0.0, numer / denom)
-        smape_df = pd.Series(smape, name='smape').to_frame()
-
-
-        _, util_smape_fp = make_meter_dir(
-            (CSV_DIR, prev_meter, 'utility', 'smape'),
-            f"{Path(perturb_filename).stem}_SMAPE.csv"
+        # gai utility - counts comparison
+        preprocess_gai_fp = PREPROCESS_MAINS_DIR / "gai" / f"{day}.parquet"
+        preprocess_gai_tbl = pq.read_table(preprocess_gai_fp).drop_columns("timestamp")
+        gai_agg_tbl = gai_agg_tbl.drop_columns("timestamp")
+        preprocess_gai_aggregate_counts = np.column_stack(
+            [preprocess_gai_tbl[n].to_numpy() for n in preprocess_gai_tbl.column_names]
         )
-        smape_df.to_csv(util_smape_fp, index=False)
+        gai_agg_arr = np.column_stack(
+            [gai_agg_tbl[n].to_numpy() for n in gai_agg_tbl.column_names]
+        )
 
-        mean_smape = smape_df['smape'].mean(numeric_only=True)
-        smape_mean_rows.append((perturb_day, mean_smape))
+        del preprocess_gai_tbl, gai_agg_tbl
+        process_stats(
+            stats,
+            day,
+            preprocess_gai_aggregate_counts,
+            gai_agg_arr,
+            "gai_counts",
+            "gai",
+        )
 
-    # flush the last meter
-    if prev_meter is not None:
-        _, util_sum_fp = make_meter_dir((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_total.csv")
-        pd.DataFrame(meter_sum_rows, columns=COLUMNS).to_csv(util_sum_fp, index=False)
-        _, util_smape_fp = make_meter_dir((CSV_DIR, prev_meter, 'utility'), f"{prev_meter}_SMAPE_mean.csv")
-        pd.DataFrame(smape_mean_rows, columns=['day', 'mean_smape']).to_csv(util_smape_fp, index=False)
+        # ldp energy - appliances utility
+        process_ldp("appliances", day)
+        process_ldp("mains", day)
+
+    metrics = sorted({k for day_stats in stats.values() for k in day_stats})
+    tables = {metric: metric_table(stats, metric, "day") for metric in metrics}
+    for metric, table in tables.items():
+        out = utils_dir / f"{metric}.csv"
+        csv.write_csv(table, out)
+
+    # billing
+    for home_id in home_ids:
+        true_monthly_profile = monthly_power_consumption(
+            preprocess_mains, home_id, "mains"
+        )
+        dplm_monthly_profile = monthly_power_consumption(
+            mains_dir, home_id, "dplm_noise"
+        )
+        process_stats(
+            billing_stats,
+            home_id,
+            true_monthly_profile,
+            dplm_monthly_profile,
+            "billing",
+        )
+    metrics = sorted({k for day_stats in billing_stats.values() for k in day_stats})
+    tables = {
+        metric: metric_table(billing_stats, metric, "home_id") for metric in metrics
+    }
+    for metric, table in tables.items():
+        out = billing_dir / f"{metric}.csv"
+        csv.write_csv(table, out)
 
 
 if __name__ == "__main__":

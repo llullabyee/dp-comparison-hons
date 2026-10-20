@@ -40,7 +40,7 @@ _CONV_OPTS = pv.ConvertOptions(
 params = load_params()
 epsilon = params["epsilon"]
 domain_max = params["domain_max"]
-boundary_list = np.linspace(0, domain_max, 10 + 1)  # 10 is number of intervals
+boundary_list = np.linspace(0, domain_max, 10 + 1)
 
 # %% directory creation
 mains_dir = PREPROCESS_MAINS_DIR
@@ -148,9 +148,7 @@ def _process_binary_file(file, boundary_list, out_dir, bin_out_dir):
 
     dropped = tbl.drop_columns(["timestamp", "mains"])
     del tbl
-    null_masks = [
-        pc.is_null(dropped.column(name)) for name in dropped.column_names
-    ]
+    null_masks = [pc.is_null(dropped.column(name)) for name in dropped.column_names]
     all_null = null_masks[0]
     for m in null_masks[1:]:
         all_null = pc.and_(all_null, m)
@@ -158,10 +156,7 @@ def _process_binary_file(file, boundary_list, out_dir, bin_out_dir):
     dropped = dropped.filter(keep_mask)
     timestamps = timestamps.filter(keep_mask)
     dropped = pa.table(
-        {
-            name: pc.fill_null(dropped.column(name), 0)
-            for name in dropped.column_names
-        }
+        {name: pc.fill_null(dropped.column(name), 0) for name in dropped.column_names}
     )
     apps_tbl, num_levels, num_rows = ldp_energy_discretise(
         dropped, boundary_list, appliance_list=ApplianceList

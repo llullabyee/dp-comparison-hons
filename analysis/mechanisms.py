@@ -6,22 +6,17 @@ this code needs to be redone a bit to not do the meter dirs all at once.
 from collections import deque
 from concurrent.futures import (
     ProcessPoolExecutor,
-    ThreadPoolExecutor,
     as_completed,
 )
-from functools import reduce
-from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from src.data.load_data import make_run_dir
 from src.mechanisms.dplm import dplm_mechanism
-from src.mechanisms.gai import build_boundary_list, gai_aggregate, gai_mechanism
+from src.mechanisms.gai import gai_mechanism
 from src.mechanisms.ldp_energy import (
-    ldp_aggregate,
     ldp_energy_mechanism,
 )
 from src.utils.appliance_map import ApplianceList
@@ -50,17 +45,19 @@ preprocess_apps = PREPROCESS_DIR / f"sens={domain_max:g}" / "appliances"
 preprocess_bin_mains = PREPROCESS_DIR / f"sens={domain_max:g}" / "mains"
 
 
-home_ids = sorted(
-    {p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")}
-)
-days = sorted(
-    {p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")}
-)
+home_ids = sorted({p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")})
+days = sorted({p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")})
 
 # %% directory creation
-run_dir, mains_dir, apps_dir, bin_main_dir, gai_dir, ldp_apps_dir, ldp_mains_dir = make_run_dir(
-    epsilon, window_size, peak, domain_max
-)
+(
+    run_dir,
+    mains_dir,
+    apps_dir,
+    bin_main_dir,
+    gai_dir,
+    ldp_apps_dir,
+    ldp_mains_dir,
+) = make_run_dir(epsilon, window_size, peak, domain_max)
 mains_dir.mkdir(parents=True, exist_ok=True)
 apps_dir.mkdir(parents=True, exist_ok=True)
 bin_main_dir.mkdir(parents=True, exist_ok=True)
@@ -79,6 +76,7 @@ def process_home(home_id):
             last_published_release=None,
             global_idx=0,
             excess=0,
+            last_published_report=None,
         )
         for m in MECHANISMS
     }
@@ -90,6 +88,7 @@ def process_home(home_id):
             last_published_release=None,
             global_idx=0,
             excess=0,
+            last_published_report=0,
         )
         for m in MECHANISMS
     }
@@ -110,7 +109,12 @@ def process_home(home_id):
             gai_values = gai_mechanism(mains_readings, boundary_list, epsilon)
             # %% dplm perturbation
             dplm_values, dplm_excess = dplm_mechanism(
-                mains_readings, 0.98, epsilon, domain_max, peak, excess=dplm_excess
+                mains_readings,
+                0.98,
+                epsilon,
+                domain_max,
+                peak,
+                excess=dplm_excess,
             )
             # %% table writing
             perturbed_tbl = pa.table(
@@ -140,6 +144,7 @@ def process_home(home_id):
                             state["last_published_release"],
                             state["global_idx"],
                             state["excess"],
+                            state["last_published_report"],
                         ) = ldp_energy_mechanism(
                             mechanism,
                             app_tbl,
@@ -151,12 +156,15 @@ def process_home(home_id):
                             state["last_published_release"],
                             state["global_idx"],
                             state["excess"],
+                            state["last_published_report"],
                         )
                         perturbed_app_fp = apps_dir / f"{fp.stem}_{mechanism}.parquet"
                         pq.write_table(ldp_noise, perturbed_app_fp)
                         del ldp_noise
                     except Exception as e:
-                            raise RuntimeError(f"Failed processing home {home_id}, file {fp.name} and mechanism {mechanism} (apps)") from e
+                        raise RuntimeError(
+                            f"Failed processing home {home_id}, file {fp.name} and mechanism {mechanism} (apps)"
+                        ) from e
 
             if bin_main_fp.exists():
                 print(f"[{home_id}] Processing binary mains: {bin_main_fp}")
@@ -171,6 +179,7 @@ def process_home(home_id):
                             state["last_published_release"],
                             state["global_idx"],
                             state["excess"],
+                            state["last_published_report"],
                         ) = ldp_energy_mechanism(
                             mechanism,
                             bin_main_tbl,
@@ -182,14 +191,19 @@ def process_home(home_id):
                             state["last_published_release"],
                             state["global_idx"],
                             state["excess"],
+                            state["last_published_report"],
                         )
-                        perturbed_bin_main_fp = bin_main_dir / f"{fp.stem}_{mechanism}.parquet"
+                        perturbed_bin_main_fp = (
+                            bin_main_dir / f"{fp.stem}_{mechanism}.parquet"
+                        )
                         pq.write_table(ldp_noise, perturbed_bin_main_fp)
                     except Exception as e:
-                            raise RuntimeError(f"Failed processing home {home_id}, file {fp.name} and mechanism {mechanism} (mains)") from e
+                        raise RuntimeError(
+                            f"Failed processing home {home_id}, file {fp.name} and mechanism {mechanism} (mains)"
+                        ) from e
         return home_id
     except Exception as e:
-            raise RuntimeError(f"Failed processing home {home_id} (gai/dplm mains)") from e
+        raise RuntimeError(f"Failed processing home {home_id} (gai/dplm mains)") from e
 
 
 # %% outer loop for perturbation — one process per home
@@ -202,9 +216,7 @@ def main():
         with ProcessPoolExecutor(max_workers=12) as ex:  # tune to core count
             futures = {ex.submit(process_home, h): h for h in home_ids}
             for fut in as_completed(futures):
-                completed_home = (
-                    fut.result()
-                )  # raises here if that home's work errored
+                completed_home = fut.result()  # raises here if that home's work errored
                 print(f"Finished home {completed_home}")
 
 

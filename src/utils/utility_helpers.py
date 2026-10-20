@@ -93,9 +93,7 @@ def mae(true_values: np.ndarray, perturbed_values: np.ndarray) -> float:
 
 
 def kruskal_wallis(true_values: np.ndarray, perturbed_values: np.ndarray):
-    h_statistic, p_value = kruskal(
-        true_values.ravel(), perturbed_values.ravel()
-    )
+    h_statistic, p_value = kruskal(true_values.ravel(), perturbed_values.ravel())
     return h_statistic, p_value
 
 
@@ -155,8 +153,8 @@ def process_stats(
 
     if not is_mechanism:
         if "true_power_consumption" not in day_stats["power"]:
-            day_stats["power"]["true_power_consumption"] = (
-                daily_power_consumption(true_vals)
+            day_stats["power"]["true_power_consumption"] = daily_power_consumption(
+                true_vals
             )
         day_stats["power"][prefix] = daily_power_consumption(perturbed_vals)
     else:
@@ -165,9 +163,7 @@ def process_stats(
             counts["total_true"] = np.nansum(true_vals)
         perturbed_count = np.nansum(perturbed_vals)
         counts[prefix] = perturbed_count
-        day_stats["counts_differences"][prefix] = (
-            counts["total_true"] - perturbed_count
-        )
+        day_stats["counts_differences"][prefix] = counts["total_true"] - perturbed_count
 
     err = perturbed_vals - true_vals
     abs_err = np.abs(err)
@@ -178,9 +174,7 @@ def process_stats(
     day_stats["mae"][prefix] = day_mae
     day_stats["smape"][prefix] = smape(true_vals, perturbed_vals)
     day_stats["bias"][prefix] = np.nanmean(err)
-    day_stats["rmse_mae_ratio"][prefix] = (
-        day_rmse / day_mae if day_mae else np.nan
-    )
+    day_stats["rmse_mae_ratio"][prefix] = day_rmse / day_mae if day_mae else np.nan
 
     # 1. scale-free error
     abs_true_sum = np.nansum(np.abs(true_vals))
@@ -221,9 +215,7 @@ def run_utils(home_id: str, days: list[str], perturbed_dir: Path) -> pa.Table:
         )
         tbl = pq.read_table(perturbed_file)
         perturbed_vals = (
-            tbl.column("dplm_noise")
-            .to_numpy(zero_copy_only=False)
-            .astype(float)
+            tbl.column("dplm_noise").to_numpy(zero_copy_only=False).astype(float)
         )
         process_stats(stats, day, true_vals, perturbed_vals, "dplm_noise")
     table = create_table(days, stats)
@@ -266,5 +258,5 @@ def monthly_power_consumption(directory, home_id, col_name) -> np.ndarray:
         return None  # or raise/log
 
     table = ds.dataset(files, format="parquet").to_table(columns=[col_name])
-    arr = table["my_col"].to_numpy()
+    arr = table[col_name].to_numpy()
     return arr

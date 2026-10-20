@@ -42,12 +42,8 @@ billing_dir = run_dir / "billing_metrics"
 utils_dir.mkdir(parents=True, exist_ok=True)
 billing_dir.mkdir(parents=True, exist_ok=True)
 
-home_ids = sorted(
-    {p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")}
-)
-days = sorted(
-    {p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")}
-)
+home_ids = sorted({p.name.split("_")[0] for p in preprocess_mains.glob("*_*.parquet")})
+days = sorted({p.stem.split("_")[1] for p in preprocess_apps.glob("*_*.parquet")})
 stats = {}
 billing_stats = {}
 
@@ -90,9 +86,7 @@ def metric_table(stats: dict, metric: str, col_name) -> pa.Table:
 def main():
     for day in days:
         # dplm utility - power comparison
-        _, mains_sum = dplm_aggregate(
-            home_ids, day, PREPROCESS_MAINS_DIR, "mains"
-        )
+        _, mains_sum = dplm_aggregate(home_ids, day, PREPROCESS_MAINS_DIR, "mains")
         _, dplm_sum = dplm_aggregate(home_ids, day, mains_dir, "dplm_noise")
         process_stats(stats, day, mains_sum, dplm_sum, "dplm")
 
@@ -104,15 +98,10 @@ def main():
 
         # gai utility - counts comparison
         preprocess_gai_fp = PREPROCESS_MAINS_DIR / "gai" / f"{day}.parquet"
-        preprocess_gai_tbl = pq.read_table(preprocess_gai_fp).drop_columns(
-            "timestamp"
-        )
+        preprocess_gai_tbl = pq.read_table(preprocess_gai_fp).drop_columns("timestamp")
         gai_agg_tbl = gai_agg_tbl.drop_columns("timestamp")
         preprocess_gai_aggregate_counts = np.column_stack(
-            [
-                preprocess_gai_tbl[n].to_numpy()
-                for n in preprocess_gai_tbl.column_names
-            ]
+            [preprocess_gai_tbl[n].to_numpy() for n in preprocess_gai_tbl.column_names]
         )
         gai_agg_arr = np.column_stack(
             [gai_agg_tbl[n].to_numpy() for n in gai_agg_tbl.column_names]
@@ -144,7 +133,7 @@ def main():
             preprocess_mains, home_id, "mains"
         )
         dplm_monthly_profile = monthly_power_consumption(
-            run_dir, home_id, "dplm_noise"
+            mains_dir, home_id, "dplm_noise"
         )
         process_stats(
             billing_stats,
@@ -153,9 +142,9 @@ def main():
             dplm_monthly_profile,
             "billing",
         )
+    metrics = sorted({k for day_stats in billing_stats.values() for k in day_stats})
     tables = {
-        metric: metric_table(billing_stats, metric, "home_id")
-        for metric in metrics
+        metric: metric_table(billing_stats, metric, "home_id") for metric in metrics
     }
     for metric, table in tables.items():
         out = billing_dir / f"{metric}.csv"

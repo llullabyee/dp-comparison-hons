@@ -2,38 +2,6 @@ import numpy as np
 import pyarrow as pa
 
 
-def build_boundary_list(epsilon: float, max_value: int) -> np.ndarray:
-    """
-    Build the GAI interval grid over ``[0, max_value]``.
-
-    The number of boundaries follows the utility heuristic |X| ~= 3 * e^eps + 2,
-    so higher privacy budgets (larger epsilon) allow a finer grid. The chosen
-    number of points is then spread evenly (integer-valued) across the domain.
-    """
-    target_count = round(3 * np.exp(epsilon) + 2)
-    count = max(2, min(max_value + 1, target_count))
-    return np.unique(np.round(np.linspace(0, max_value, count)).astype(int))
-    # count = max(2, round(3 * np.exp(epsilon) + 2))
-    # step = max_value / (count - 1)
-    # return np.asarray([round(i * step) for i in range(count)])
-
-
-# def return_bounds(column, boundaries, interval_size):
-#     idx = np.searchsorted(boundaries, column, side="left")
-#     exact = (idx < interval_size) & (
-#         boundaries[np.clip(idx, 0, interval_size - 1)] == column
-#     )
-#     lower = np.where(
-#         exact,
-#         boundaries[np.clip(idx, 0, interval_size - 1)],
-#         boundaries[np.clip(idx - 1, 0, interval_size - 1)],
-#     )
-#     upper = np.where(
-#         exact, lower, boundaries[np.clip(idx, 0, interval_size - 1)]
-#     )
-#     return lower, upper
-
-
 def return_bounds(column, boundaries, interval_size):
     """
     finds the boundaries of values, where the boundaries are
@@ -64,9 +32,7 @@ def gai_discretise(readings, upper, lower):
     span = (upper - lower).astype(float)
     with np.errstate(divide="ignore", invalid="ignore"):
         v_prob = np.where(span > 0, (readings - lower) / span, 0.0)
-    discretised = np.where(
-        np.random.random(readings.shape) < v_prob, upper, lower
-    )
+    discretised = np.where(np.random.random(readings.shape) < v_prob, upper, lower)
     return discretised
 
 
@@ -76,9 +42,7 @@ def gai_perturb(epsilon, n, n_int, boundaries, discretised):
     exp_eps = np.exp(epsilon)
     p_prob = exp_eps / (n_int - 1 + exp_eps)
 
-    pos = np.searchsorted(
-        boundaries, discretised
-    )  # index of each discretised value
+    pos = np.searchsorted(boundaries, discretised)  # index of each discretised value
     keep = np.random.random(n) < p_prob
 
     # uniform pick among the (n_int - 1) values that are not `pos`

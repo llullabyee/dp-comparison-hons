@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 
 from src.data.load_data import make_run_dir
 from src.mechanisms.dplm import dplm_mechanism
-from src.mechanisms.gai import gai_mechanism
+from src.mechanisms.krr import gai_mechanism
 from src.mechanisms.ldp_energy import (
     ldp_energy_mechanism,
 )

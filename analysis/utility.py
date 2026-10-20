@@ -4,7 +4,7 @@ import pyarrow.parquet as pq
 from pyarrow import csv
 
 from src.data.load_data import make_run_dir
-from src.mechanisms.gai import gai_counts_to_power
+from src.mechanisms.krr import gai_counts_to_power
 from src.utils.config import (
     MECHANISMS,
     PREPROCESS_DIR,

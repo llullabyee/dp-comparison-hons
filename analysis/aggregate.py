@@ -10,7 +10,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from src.data.load_data import make_run_dir
-from src.mechanisms.gai import (
+from src.mechanisms.krr import (
     gai_aggregate,
     gai_discretise,
     return_bounds,

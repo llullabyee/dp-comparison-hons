@@ -8,7 +8,7 @@ import pyarrow as pa
 
 sys.path.insert(0, "/Users/lullaby/Projects/University/dp-comparison-hons")
 
-from src.mechanisms.gai import gai_aggregate, gai_counts_to_power, gai_mechanism
+from src.mechanisms.krr import gai_aggregate, gai_counts_to_power, gai_mechanism
 
 
 # %%
@@ -20,9 +20,7 @@ def test_gai(numbers, epsilon, num_subintervals):
     perturbed = gai_mechanism(numbers, boundary_list, epsilon).reshape(1, -1)
     # print(perturbed)
     # %%
-    counts = gai_aggregate(
-        perturbed, epsilon, num_subintervals + 1, boundary_list
-    )
+    counts = gai_aggregate(perturbed, epsilon, num_subintervals + 1, boundary_list)
     # print(counts)
     # %%
     table = pa.table(
@@ -47,9 +45,7 @@ def main():
     for i, subintervals in enumerate(subints):
         totals = {}
         for epsilon in eps:
-            results = [
-                test_gai(numbers, epsilon, subintervals) for _ in range(30)
-            ]
+            results = [test_gai(numbers, epsilon, subintervals) for _ in range(30)]
             sums = [np.sum(r) for r in results]
             agg_reconstructed = np.mean(sums)
             # print(agg_reconstructed, agg_nums)
